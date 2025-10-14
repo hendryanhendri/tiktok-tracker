@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 import { motion } from "framer-motion";
+import { useMemo } from "react";
+import { estimateGiftValue } from "@/utils/giftValue";
 
 export default function LiveStats({
   username,
@@ -9,7 +11,18 @@ export default function LiveStats({
   gifts,
   comments,
   progress,
+  allGifts,
 }: any) {
+  const estimatedRevenue = useMemo(() => {
+    if (!Array.isArray(allGifts) || !allGifts.length) return 0;
+
+    const total = allGifts.reduce((sum: number, g: any) => {
+      return sum + estimateGiftValue(g.gift, g.count || 1);
+    }, 0);
+
+    return total;
+  }, [allGifts]);
+
   return (
     <>
       <div className="mt-8 w-4/5 sm:max-w-md mx-auto bg-white/10 rounded-full h-3 overflow-hidden border border-white/10">
@@ -28,11 +41,27 @@ export default function LiveStats({
       >
         <h2 className="text-lg sm:text-xl font-semibold mb-2">@{username || "—"}</h2>
         <div className="flex justify-center gap-6 text-sm sm:text-base text-gray-300 flex-wrap">
-          <div>👁️ Viewers: <span className="font-semibold text-pink-400">{viewerCount ?? "—"}</span></div>
-          <div>📈 Total Views: <span className="font-semibold text-blue-400">{totalViews ?? "—"}</span></div>
-          <div>🎁 Gifts: <span className="font-semibold text-white">{gifts}</span></div>
-          <div>💬 Comments: <span className="font-semibold text-white">{comments}</span></div>
+          <div>
+            👁️ Viewers: <span className="font-semibold text-pink-400">{viewerCount ?? "—"}</span>
+          </div>
+          <div>
+            📈 Total Views: <span className="font-semibold text-blue-400">{totalViews ?? "—"}</span>
+          </div>
+          <div>
+            🎁 Gifts: <span className="font-semibold text-white">{gifts}</span>
+          </div>
+          <div>
+            💬 Comments: <span className="font-semibold text-white">{comments}</span>
+          </div>
         </div>
+
+        {/* Tambahan estimasi pendapatan */}
+        {/* <div className="mt-4 text-lg font-semibold text-green-400">
+          💰 Estimasi Pendapatan:{" "}
+          <span className="text-white">
+            Rp {estimatedRevenue.toLocaleString("id-ID")}
+          </span>
+        </div> */}
       </motion.div>
     </>
   );

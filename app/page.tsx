@@ -139,9 +139,16 @@ export default function HomePage() {
               </button>
             ) : (
               <button
-                onClick={() => {
-                  setIsTracking(false);
-                  showToast("🛑 Tracking stopped", "error");
+                onClick={async () => {
+                  try {
+                    await fetch("http://localhost:8000/stop_tracking", { method: "POST" });
+                    setIsTracking(false);
+                    tracker.disconnect?.();
+                    showToast("🛑 Tracking stopped", "error");
+                  } catch (err) {
+                    console.error(err);
+                    showToast("⚠️ Gagal menghentikan tracking", "error");
+                  }
                 }}
                 className="w-full sm:w-auto bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-md text-sm"
               >
