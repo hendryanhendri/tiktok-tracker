@@ -189,7 +189,7 @@ export default function HomePage() {
           className="bg-white/10 border border-white/20 rounded-md px-3 py-2 mb-4 text-sm focus:border-pink-500 outline-none"
         >
           <option value="track">🎥 Track User Live</option>
-          <option value="check">👀 Check User Watching</option>
+          {/* <option value="check">👀 Check User Watching</option> */}
           <option value="find">🌍 Find User in Live Explore</option>
         </select>
 
