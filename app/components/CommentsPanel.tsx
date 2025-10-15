@@ -6,7 +6,6 @@ import { motion, AnimatePresence } from "framer-motion";
 export default function CommentsPanel({ comments, onClear }: any) {
   const reversedComments = [...comments].reverse();
 
-  // 🔹 Fungsi export ke CSV
   const handleExportCSV = () => {
     if (!comments.length) return alert("Tidak ada komentar untuk di-export!");
 
