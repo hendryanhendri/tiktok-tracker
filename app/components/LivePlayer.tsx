@@ -1,30 +1,35 @@
 "use client";
+import Hls from "hls.js";
 import { useEffect, useRef } from "react";
-import flvjs from "flv.js";
 
-export default function LivePlayer({ flvUrl }: { flvUrl: string }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+export default function LivePlayer({ hlsUrl }: { hlsUrl: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (typeof window !== "undefined" && flvjs.isSupported() && videoRef.current) {
-      const flvPlayer = flvjs.createPlayer({ type: "flv", url: flvUrl });
-      flvPlayer.attachMediaElement(videoRef.current);
-      flvPlayer.load();
-      flvPlayer.play();
+    if (!hlsUrl || !videoRef.current) return;
 
-      return () => flvPlayer.destroy();
+    if (videoRef.current.canPlayType("application/vnd.apple.mpegurl")) {
+      videoRef.current.src = hlsUrl;
+    } else if (Hls.isSupported()) {
+      const hls = new Hls();
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(videoRef.current);
+      hls.on(Hls.Events.ERROR, function (event, data) {
+        console.error("HLS error:", data);
+      });
+      return () => hls.destroy();
+    } else {
+      console.error("HLS not supported in this browser.");
     }
-  }, [flvUrl]);
+  }, [hlsUrl]);
 
   return (
-    <div className="flex justify-center mt-8">
-      <video
-        ref={videoRef}
-        controls
-        autoPlay
-        muted
-        className="w-full max-w-xl rounded-2xl border border-white/10 shadow-lg bg-black"
-      />
-    </div>
+    <video
+      ref={videoRef}
+      controls
+      autoPlay
+      muted
+      className="rounded-2xl w-full max-w-xl border border-white/10 shadow-lg bg-black mt-8"
+    />
   );
 }

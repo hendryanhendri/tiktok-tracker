@@ -13,7 +13,6 @@ import UserCard from "@/app/components/UserCard";
 import { useTikTokTracker } from "@/app/hooks/useTikTokTracker";
 import dynamic from "next/dynamic";
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const LivePlayer = dynamic(() => import("@/app/components/LivePlayer"), { ssr: false });
 
 export default function HomePage() {
@@ -254,16 +253,7 @@ export default function HomePage() {
           />
 
           {/* Player */}
-          {watchingInfo?.hlsUrl && (
-            <video
-              controls
-              autoPlay
-              muted
-              className="rounded-2xl w-full max-w-xl border border-white/10 shadow-lg bg-black mt-8"
-            >
-              <source src={watchingInfo.hlsUrl} type="application/x-mpegURL" />
-            </video>
-          )}
+          {watchingInfo?.hlsUrl && <LivePlayer hlsUrl={watchingInfo.hlsUrl} />}
 
           {/* Comments & Gifts */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 mt-10 px-4 w-full max-w-5xl mx-auto">
