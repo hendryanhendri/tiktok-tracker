@@ -12,7 +12,7 @@ export function useTikTokTracker() {
 
   const socketRef = useRef<WebSocket | null>(null);
 
-  // ✅ CONNECT — buka koneksi WebSocket
+
   const connect = (uname: string) => {
     if (socketRef.current) socketRef.current.close();
 
@@ -54,7 +54,6 @@ export function useTikTokTracker() {
     };
   };
 
-  // ✅ DISCONNECT — tutup koneksi WebSocket
   const disconnect = () => {
     if (socketRef.current) {
       console.log("🔌 Closing WebSocket connection...");
@@ -69,7 +68,6 @@ export function useTikTokTracker() {
     setGiftTotal(0);
   };
 
-  // ✅ Cleanup otomatis saat komponen di-unmount
   useEffect(() => {
     return () => {
       if (socketRef.current) {
@@ -79,7 +77,6 @@ export function useTikTokTracker() {
     };
   }, []);
 
-  // ✅ Return semua fungsi & state
   return {
     connectionStatus,
     comments,
@@ -88,6 +85,6 @@ export function useTikTokTracker() {
     totalViews,
     giftTotal,
     connect,
-    disconnect, // ✅ ini yang ditambahkan
+    disconnect,
   };
 }
