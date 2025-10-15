@@ -56,6 +56,7 @@ export default function CommentsPanel({ comments, onClear }: any) {
         </div>
       </div>
 
+      {/* === LIST KOMENTAR === */}
       <div className="h-56 overflow-y-auto space-y-2 text-sm scrollbar-thin flex flex-col-reverse">
         <AnimatePresence>
           {reversedComments.length ? (
@@ -68,13 +69,28 @@ export default function CommentsPanel({ comments, onClear }: any) {
                 transition={{ duration: 0.25 }}
                 className="border-b border-white/10 pb-2 flex items-start space-x-3 text-gray-300"
               >
-                <img
-                  src={c.avatar || "/default-avatar.png"}
-                  alt="avatar"
-                  className="w-8 h-8 rounded-full border border-white/10 object-cover"
-                />
+                {/* Klik avatar → buka profil TikTok */}
+                <a
+                  href={`https://www.tiktok.com/@${c.user}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <img
+                    src={c.avatar || "/default-avatar.png"}
+                    alt="avatar"
+                    className="w-8 h-8 rounded-full border border-white/10 object-cover cursor-pointer hover:scale-110 transition-transform"
+                  />
+                </a>
+
                 <div className="flex-1">
-                  <span className="text-pink-400 font-semibold">@{c.user}</span>
+                  <a
+                    href={`https://www.tiktok.com/@${c.user}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-pink-400 font-semibold hover:underline"
+                  >
+                    @{c.user}
+                  </a>
                   <p className="text-gray-200 text-sm">{c.text}</p>
                 </div>
               </motion.div>
