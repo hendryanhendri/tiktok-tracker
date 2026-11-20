@@ -9,6 +9,11 @@ Download/clone project, lalu **klik dua kali `Start-Tracker.bat`**. Pertama kali
 mengunduh Node.js portable (jika belum terpasang), memasang dependency, dan build — butuh internet
 dan beberapa menit. Setelah itu browser terbuka ke `http://localhost:3000`. Run berikutnya langsung cepat.
 
+### macOS
+
+Klik dua kali **`Start-Tracker.command`** (langkahnya sama). Jika macOS memblokir karena file hasil download,
+klik kanan file → **Open** → **Open** (cukup sekali), atau jalankan `xattr -dr com.apple.quarantine .` di folder project.
+
 ## Menjalankan (manual)
 
 ```bash
