@@ -1,6 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
+import { WS_URL } from "@/app/lib/config";
 import { useEffect, useRef, useState } from "react";
+
+const MAX_COMMENTS = 600; // batasi daftar komentar di memori browser; total tetap dihitung terpisah
+const MAX_GIFTS = 5000;
 
 export function useTikTokTracker() {
   const [connectionStatus, setConnectionStatus] = useState("offline");
@@ -9,14 +13,17 @@ export function useTikTokTracker() {
   const [viewerCount, setViewerCount] = useState<number | null>(null);
   const [totalViews, setTotalViews] = useState(0);
   const [giftTotal, setGiftTotal] = useState(0);
+  const [commentTotal, setCommentTotal] = useState(0); // total diterima sejak track dimulai (tidak terpotong)
 
   const socketRef = useRef<WebSocket | null>(null);
+  const idRef = useRef(0);
+  const stamp = (data: any) => ({ ...data, id: ++idRef.current, ts: Date.now() });
 
 
   const connect = (uname: string) => {
     if (socketRef.current) socketRef.current.close();
 
-    const ws = new WebSocket("ws://localhost:8001");
+    const ws = new WebSocket(WS_URL);
     socketRef.current = ws;
 
     ws.onopen = () => {
@@ -41,14 +48,15 @@ export function useTikTokTracker() {
           setConnectionStatus(data.status || "offline");
           break;
         case "comment":
-          setComments((p) => [...p, data]);
+          setComments((p) => [...p, stamp(data)].slice(-MAX_COMMENTS));
+          setCommentTotal((n) => n + 1);
           break;
         case "gift":
-          setGifts((p) => [...p, data]);
+          setGifts((p) => [...p, stamp(data)].slice(-MAX_GIFTS));
           break;
         case "viewer":
-          setViewerCount(data.viewerCount);
-          setTotalViews(data.totalViews);
+          if (data.viewerCount != null) setViewerCount(data.viewerCount);
+          if (data.totalViews) setTotalViews(data.totalViews);
           break;
       }
     };
@@ -66,7 +74,10 @@ export function useTikTokTracker() {
     setViewerCount(null);
     setTotalViews(0);
     setGiftTotal(0);
+    setCommentTotal(0);
   };
+
+  const clearComments = () => setComments([]);
 
   useEffect(() => {
     return () => {
@@ -84,7 +95,9 @@ export function useTikTokTracker() {
     viewerCount,
     totalViews,
     giftTotal,
+    commentTotal,
     connect,
     disconnect,
+    clearComments,
   };
 }

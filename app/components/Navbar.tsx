@@ -1,84 +1,49 @@
 "use client";
-import { useState } from "react";
-import { FaPlay, FaChartBar, FaGift, FaCog, FaCommentDots, FaBell, FaUser } from "react-icons/fa";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { FaPlay, FaTowerBroadcast, FaVideo, FaBook } from "react-icons/fa6";
 
-export default function Navbar({
-  mode,
-  status,
-  viewerCount,
-}: {
-  mode: string;
-  status: string;
-  viewerCount?: number | null;
-}) {
-  const [menuOpen, setMenuOpen] = useState(false);
+const links = [
+  { name: "Live Player", icon: FaTowerBroadcast, href: "/" },
+  { name: "Video Saja", icon: FaVideo, href: "/video" },
+  { name: "Dokumentasi", icon: FaBook, href: "/doc" },
+];
 
-  const statusColor =
-    status === "connected"
-      ? "bg-green-500"
-      : status === "ended"
-      ? "bg-gray-500"
-      : status === "disconnected"
-      ? "bg-yellow-500"
-      : status === "connecting"
-      ? "bg-blue-400"
-      : "bg-gray-400";
-
-  const menus = [
-    { name: "Dashboard", icon: <FaChartBar />, href: "/dashboard" },
-    { name: "Live", icon: <FaPlay />, href: "/" },
-    { name: "Comments", icon: <FaCommentDots />, href: "/comments" },
-    { name: "Gifts", icon: <FaGift />, href: "/gift-estimator" },
-    { name: "Notifications", icon: <FaBell />, href: "/notifications" },
-    { name: "Settings", icon: <FaCog />, href: "/settings" },
-  ];
+export default function Navbar() {
+  const pathname = usePathname();
 
   return (
-    <nav className="fixed top-0 w-full z-50 backdrop-blur-md bg-white/5 border-b border-white/10 px-4 py-3 flex justify-between items-center">
-      {/* === LEFT SIDE === */}
-      <div className="flex items-center space-x-3">
-        <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
-          <FaPlay className="w-4 h-4 text-white" />
-        </div>
-        <div>
-          <h1 className="text-base sm:text-lg font-semibold">LiveStream Tracker</h1>
-          {mode === "track" && (
-            <div className="flex items-center text-xs text-gray-300">
-              <span className={`w-2 h-2 rounded-full mr-1 ${statusColor}`} />
-              {status.toUpperCase()}
-              {viewerCount && (
-                <span className="ml-2 text-pink-300">👁️ {viewerCount}</span>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+    <header className="fixed inset-x-0 top-0 z-50 border-b border-line bg-background/70 backdrop-blur-xl">
+      <nav aria-label="Navigasi utama" className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4">
+        <Link href="/" className="flex items-center gap-3">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-purple-600 shadow-lg shadow-accent/20">
+            <FaPlay className="h-3.5 w-3.5 text-white" />
+          </span>
+          <span className="hidden text-base font-semibold tracking-tight sm:inline sm:text-lg">
+            TikTok <span className="text-accent-2">Live Player</span>
+          </span>
+        </Link>
 
-      {/* === RIGHT SIDE MENU === */}
-      <div className="relative">
-        <button
-          onClick={() => setMenuOpen(!menuOpen)}
-          className="flex items-center bg-white/10 px-3 py-2 rounded-lg hover:bg-white/20 transition"
-        >
-          <FaUser className="text-white mr-2" />
-          <span className="text-sm text-gray-200">Menu</span>
-        </button>
-
-        {menuOpen && (
-          <div className="absolute right-0 mt-2 w-48 bg-gray-900/90 backdrop-blur-md border border-white/10 rounded-xl shadow-lg overflow-hidden">
-            {menus.map((menu) => (
-              <a
-                key={menu.name}
-                href={menu.href}
-                className="flex items-center gap-2 px-4 py-2 text-gray-200 hover:bg-white/10 transition"
-              >
-                {menu.icon}
-                <span>{menu.name}</span>
-              </a>
-            ))}
-          </div>
-        )}
-      </div>
-    </nav>
+        <ul className="flex items-center gap-1 rounded-xl border border-line bg-surface p-1">
+          {links.map(({ name, icon: Icon, href }) => {
+            const active = pathname === href;
+            return (
+              <li key={href}>
+                <Link
+                  href={href}
+                  aria-current={active ? "page" : undefined}
+                  className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition ${
+                    active ? "bg-white/15 font-medium text-white" : "text-muted hover:bg-white/10 hover:text-white"
+                  }`}
+                >
+                  <Icon aria-hidden className="h-3.5 w-3.5" />
+                  {name}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+    </header>
   );
 }

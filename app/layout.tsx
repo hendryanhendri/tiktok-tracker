@@ -1,7 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
+import HomeApp from "./components/HomeApp";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -15,8 +16,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LiveStream Tracker",
-  description: "Track live streams from TikTok in real-time",
+  title: "TikTok Live Player",
+  description: "Tonton video dan dengarkan audio live TikTok dengan pilihan kualitas.",
+  authors: [{ name: "FullStackNotes" }],
+  creator: "FullStackNotes",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0f0b24",
 };
 
 export default function RootLayout({
@@ -25,13 +32,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="id">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased flex min-h-screen flex-col`}
       >
-       <Navbar mode="default" status="offline" viewerCount={null} />
-        {children}
-        <Footer/>
+        <Navbar />
+        <main className="flex-1 pt-20">
+          <HomeApp />
+          {children}
+        </main>
+        <Footer />
       </body>
     </html>
   );
