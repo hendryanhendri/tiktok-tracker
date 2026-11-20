@@ -1,68 +1,68 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 import { motion } from "framer-motion";
-import { useMemo } from "react";
-import { estimateGiftValue } from "@/utils/giftValue";
+import { FaEye, FaChartLine, FaGift, FaComment } from "react-icons/fa6";
 
-export default function LiveStats({
-  username,
-  viewerCount,
-  totalViews,
-  gifts,
-  comments,
-  progress,
-  allGifts,
-}: any) {
-  const estimatedRevenue = useMemo(() => {
-    if (!Array.isArray(allGifts) || !allGifts.length) return 0;
+const fmt = (n: number | null | undefined) =>
+  n === null || n === undefined ? "—" : n.toLocaleString("id-ID");
 
-    const total = allGifts.reduce((sum: number, g: any) => {
-      return sum + estimateGiftValue(g.gift, g.count || 1);
-    }, 0);
+const STATUS: Record<string, { label: string; dot: string; text: string }> = {
+  connected: { label: "Terhubung", dot: "bg-emerald-400", text: "text-emerald-300" },
+  connecting: { label: "Menghubungkan…", dot: "bg-sky-400 animate-pulse", text: "text-sky-300" },
+  ended: { label: "Live berakhir", dot: "bg-gray-400", text: "text-gray-300" },
+  error: { label: "Error koneksi", dot: "bg-rose-400", text: "text-rose-300" },
+  disconnected: { label: "Terputus", dot: "bg-amber-400", text: "text-amber-300" },
+  offline: { label: "Offline", dot: "bg-gray-400", text: "text-gray-300" },
+};
 
-    return total;
-  }, [allGifts]);
+export function StatusPill({ status }: { status: string }) {
+  const s = STATUS[status.toLowerCase()] ?? STATUS.offline;
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium ${s.text}`}>
+      <span className={`h-2 w-2 rounded-full ${s.dot}`} />
+      {s.label}
+    </span>
+  );
+}
+
+type Props = {
+  username: string;
+  status: string;
+  viewerCount: number | null;
+  totalViews: number;
+  gifts: number;
+  comments: number;
+};
+
+export default function LiveStats({ username, status, viewerCount, totalViews, gifts, comments }: Props) {
+  const items = [
+    { label: "Viewers", value: fmt(viewerCount), icon: FaEye, color: "text-accent" },
+    { label: "Total Views", value: fmt(totalViews), icon: FaChartLine, color: "text-accent-2" },
+    { label: "Gifts", value: fmt(gifts), icon: FaGift, color: "text-amber-300" },
+    { label: "Komentar", value: fmt(comments), icon: FaComment, color: "text-violet-300" },
+  ];
 
   return (
-    <>
-      <div className="mt-8 w-4/5 sm:max-w-md mx-auto bg-white/10 rounded-full h-3 overflow-hidden border border-white/10">
-        <motion.div
-          className="h-full bg-gradient-to-r from-pink-500 to-blue-500"
-          initial={{ width: 0 }}
-          animate={{ width: `${progress}%` }}
-          transition={{ ease: "easeOut", duration: 0.2 }}
-        />
+    <motion.section
+      aria-label="Statistik live"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="w-full"
+    >
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-xl font-semibold">@{username || "—"}</h2>
+        <StatusPill status={status} />
       </div>
-
-      <motion.div
-        className="mt-8 bg-white/10 border border-white/10 px-6 py-4 rounded-2xl backdrop-blur-md text-center max-w-3xl shadow-lg"
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
-        <h2 className="text-lg sm:text-xl font-semibold mb-2">@{username || "—"}</h2>
-        <div className="flex justify-center gap-6 text-sm sm:text-base text-gray-300 flex-wrap">
-          <div>
-            👁️ Viewers: <span className="font-semibold text-pink-400">{viewerCount ?? "—"}</span>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {items.map(({ label, value, icon: Icon, color }) => (
+          <div key={label} className="rounded-2xl border border-line bg-surface p-4 backdrop-blur-md">
+            <div className="flex items-center gap-2 text-xs text-muted">
+              <Icon aria-hidden className={`h-3.5 w-3.5 ${color}`} />
+              {label}
+            </div>
+            <p className="mt-2 text-2xl font-semibold tabular-nums">{value}</p>
           </div>
-          <div>
-            📈 Total Views: <span className="font-semibold text-blue-400">{totalViews ?? "—"}</span>
-          </div>
-          <div>
-            🎁 Gifts: <span className="font-semibold text-white">{gifts}</span>
-          </div>
-          <div>
-            💬 Comments: <span className="font-semibold text-white">{comments}</span>
-          </div>
-        </div>
-
-        {/* Tambahan estimasi pendapatan */}
-        {/* <div className="mt-4 text-lg font-semibold text-green-400">
-          💰 Estimasi Pendapatan:{" "}
-          <span className="text-white">
-            Rp {estimatedRevenue.toLocaleString("id-ID")}
-          </span>
-        </div> */}
-      </motion.div>
-    </>
+        ))}
+      </div>
+    </motion.section>
   );
 }
