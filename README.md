@@ -3,7 +3,13 @@
 Tonton live TikTok dengan pilihan kualitas (rendah → tinggi), mode audio, tampilan mobile/lebar, fullscreen,
 Picture-in-Picture, plus komentar, gift, dan viewer. Frontend Next.js + backend Node kecil. Tanpa Python.
 
-## Menjalankan
+## Menjalankan di Windows (satu klik)
+
+Download/clone project, lalu **klik dua kali `Start-Tracker.bat`**. Pertama kali, skrip otomatis
+mengunduh Node.js portable (jika belum terpasang), memasang dependency, dan build — butuh internet
+dan beberapa menit. Setelah itu browser terbuka ke `http://localhost:3000`. Run berikutnya langsung cepat.
+
+## Menjalankan (manual)
 
 ```bash
 npm install

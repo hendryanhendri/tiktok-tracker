@@ -46,3 +46,6 @@ next-env.d.ts
 
 # python venv (yt-dlp)
 /.venv
+
+# portable runtime Windows
+/.runtime
