@@ -1,6 +1,7 @@
 #!/bin/bash
 # TikTok Live Tracker - satu klik jalan di macOS
 cd "$(dirname "$0")" || exit 1
+xattr -dr com.apple.quarantine . 2>/dev/null  # bersihkan tanda karantina macOS untuk file lain
 
 NODE_VER="22.12.0"
 RUNTIME="$PWD/.runtime"

@@ -11,8 +11,18 @@ dan beberapa menit. Setelah itu browser terbuka ke `http://localhost:3000`. Run 
 
 ### macOS
 
-Klik dua kali **`Start-Tracker.command`** (langkahnya sama). Jika macOS memblokir karena file hasil download,
-klik kanan file → **Open** → **Open** (cukup sekali), atau jalankan `xattr -dr com.apple.quarantine .` di folder project.
+**Paling mudah (tanpa peringatan Apple):** buka **Terminal**, tempel satu baris ini, lalu Enter.
+Mengunduh lewat `curl` tidak diberi tanda karantina, jadi langsung jalan.
+
+```bash
+curl -L https://github.com/hendryanhendri/tiktok-tracker/archive/refs/heads/feat/Hendri-update.zip -o tt.zip && unzip -q tt.zip && cd tiktok-tracker-feat-Hendri-update && bash Start-Tracker.command
+```
+
+(Repo harus public agar `curl` bisa mengunduh. Jika private, pakai cara di bawah.)
+
+**Jika download ZIP lewat browser:** macOS memblokir `Start-Tracker.command` ("Apple could not verify…").
+Klik **Done**, lalu buka **System Settings → Privacy & Security → Open Anyway** (cukup sekali),
+atau jalankan di folder project: `xattr -dr com.apple.quarantine .`
 
 ## Menjalankan (manual)
 
