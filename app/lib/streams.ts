@@ -78,9 +78,13 @@ export function buildQualities(urls: string[], meta: Record<string, Meta> = {}):
   return [...byLabel.values()]
     .sort((a, b) => a.rank - b.rank)
     .map((it) => {
-      // Urutan percobaan: HLS dulu, lalu FLV, lalu lainnya (varian cadangan bila codec/URL bermasalah).
+      // Urutan percobaan: FLV dulu (mulai ~1 dtk lebih cepat dan jedanya lebih kecil; dipakai juga oleh web TikTok), lalu HLS sebagai cadangan.
+      // Varian HEVC selalu paling akhir.
       const hv = (u: string) => (meta[pathOf(u)]?.hevc ? 1 : 0);
-      const ordered = [...it.all].sort((a, b) => hv(a) - hv(b) || Number(isHls(b)) - Number(isHls(a)));
+      // URL "only_audio=1" hanya berisi suara (tanpa gambar): selalu paling akhir, jangan sampai dicoba lebih dulu daripada yang bergambar
+      // (kalau tidak, kualitas itu memutar suara saja lalu baru pindah varian setelah beberapa detik, terlihat seperti reload total).
+      const ao = (u: string) => (/[?&]only_audio=1/i.test(u) ? 1 : 0);
+      const ordered = [...it.all].sort((a, b) => ao(a) - ao(b) || hv(a) - hv(b) || Number(isHls(a)) - Number(isHls(b)));
       return { id: it.label, label: it.label, url: ordered[0], alts: ordered.slice(1), height: it.height };
     });
 }

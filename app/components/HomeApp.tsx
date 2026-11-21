@@ -15,7 +15,9 @@ import { useTikTokTracker } from "@/app/hooks/useTikTokTracker";
 import { API_URL } from "@/app/lib/config";
 import { bookmarkletHref, buildQualities, decodeHash, parsePayload, type Meta } from "@/app/lib/streams";
 
-const LivePlayer = dynamic(() => import("@/app/components/LivePlayer"), {
+// Pemutar dan pustaka FLV dipanaskan sejak halaman dibuka (saat idle), bukan baru diunduh setelah video diminta.
+const loadPlayer = () => import("@/app/components/LivePlayer");
+const LivePlayer = dynamic(loadPlayer, {
   ssr: false,
   loading: () => <div className="aspect-video animate-pulse rounded-2xl bg-white/5" />,
 });
@@ -33,6 +35,15 @@ export default function HomeApp() {
   const pathname = usePathname();
   const plain = pathname === "/video"; // menu "Video Saja": hanya video dan suara
   const tracker = useTikTokTracker();
+  useEffect(() => {
+    const warm = () => {
+      void loadPlayer();
+      void import("mpegts.js");
+    };
+    const w = window as Window & { requestIdleCallback?: (cb: () => void) => number };
+    if (w.requestIdleCallback) w.requestIdleCallback(warm);
+    else setTimeout(warm, 500);
+  }, []);
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [stream, setStream] = useState<Stream | null>(null);
