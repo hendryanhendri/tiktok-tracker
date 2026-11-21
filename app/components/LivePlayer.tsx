@@ -186,9 +186,27 @@ export default function LivePlayer({
   const [isAuto, setIsAuto] = useState(true); // pilihan "Auto" (default, seperti TikTok)
   const [autoIdx, setAutoIdx] = useState(autoStart);
   const autoBaseRef = useRef({ n: 0, t: 0 });
+  const rawCandidatesRef = useRef<string[]>([]);
+  const userRateRef = useRef(1); // kecepatan yang diminta pengguna/ekstensi (mis. Video Speed Controller)
   const [useProxy, setUseProxy] = useState(false);
   const [restartKey, setRestartKey] = useState(0); // dinaikkan oleh penjaga macet untuk memulai ulang pemutar
   useEffect(() => {
+    // Buka koneksi ke server stream lebih awal (DNS + TLS) agar byte pertama datang lebih cepat.
+    try {
+      const u = rawCandidatesRef.current[0];
+      if (u && /^https?:/i.test(u)) {
+        const o = new URL(u).origin;
+        if (!document.head.querySelector(`link[rel=preconnect][href="${o}"]`)) {
+          const l = document.createElement("link");
+          l.rel = "preconnect";
+          l.href = o;
+          l.crossOrigin = "anonymous";
+          document.head.appendChild(l);
+        }
+      }
+    } catch {
+      /* abaikan */
+    }
     void import("mpegts.js"); // unduh modul pemutar FLV di muka agar awal putar tidak menunggu
   }, []);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -380,6 +398,7 @@ export default function LivePlayer({
     return () => clearTimeout(t);
   }, [qNotice]);
   const rawCandidates = selected ? [selected.url, ...(selected.alts ?? [])] : [];
+  rawCandidatesRef.current = rawCandidates;
   const hasHls = rawCandidates.some((u) => !isFlv(u));
   const candidates = flvBad ? [...rawCandidates.filter((u) => !isFlv(u)), ...rawCandidates.filter(isFlv)] : rawCandidates;
   const baseUrl = candidates[variant] ?? selected?.url ?? "";
@@ -577,15 +596,12 @@ export default function LivePlayer({
           const player = mpegts.createPlayer(
             { type: "flv", isLive: true, url: src },
             {
-              // Mode normal: stash buffer aktif (dasar kelancaran, seperti membuka link langsung di browser).
-              // Hanya mode latensi rendah yang mengejar tepi live.
-              enableStashBuffer: !lowLatency,
+              // Stash buffer dimatikan di semua mode: ini sumber tunda terbesar FLV (data menunggu terkumpul dulu sebelum diputar).
+              // Mengejar tepi live dilakukan oleh pengatur kecepatan di komponen ini (bukan pustaka), agar tidak berebut playbackRate dengan ekstensi speed.
+              enableStashBuffer: false,
               autoCleanupSourceBuffer: true,
               autoCleanupMaxBackwardDuration: 30,
               autoCleanupMinBackwardDuration: 15,
-              liveBufferLatencyChasing: lowLatency,
-              liveBufferLatencyMaxLatency: 3,
-              liveBufferLatencyMinRemain: 1,
             },
           );
           player.attachMediaElement(video);
@@ -649,9 +665,9 @@ export default function LivePlayer({
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: lowLatency,
-          liveSyncDurationCount: lowLatency ? 2 : 4,
+          liveSyncDurationCount: lowLatency ? 2 : 3,
           liveMaxLatencyDurationCount: lowLatency ? 5 : 12,
-          maxLiveSyncPlaybackRate: lowLatency ? 1.1 : 1, // kejar tepi live dengan percepatan halus, bukan loncat
+          maxLiveSyncPlaybackRate: 1, // playbackRate hanya diatur oleh pengatur kecepatan komponen (lihat di bawah)
           maxBufferLength: lowLatency ? 8 : 30,
           maxMaxBufferLength: 40,
           backBufferLength: 15,
@@ -1036,7 +1052,8 @@ export default function LivePlayer({
         autoBaseRef.current = { n, t: Date.now() }; // statistik di-reset saat pemutar dimulai ulang
         return;
       }
-      if (Date.now() - base.t > 30000) autoBaseRef.current = { n, t: Date.now() };
+      if (userRateRef.current > 1.01) autoBaseRef.current = { n, t: Date.now() }; // macet akibat user mempercepat bukan salah kualitas
+      else if (Date.now() - base.t > 30000) autoBaseRef.current = { n, t: Date.now() };
       else if (n - base.n >= 6 && autoIdx < qOptions.length - 1 && (videoRef.current?.currentTime ?? 0) > 15) {
         log(`Auto: tersendat ${n - base.n}x, turun ke kualitas lebih rendah`);
         autoBaseRef.current = { n, t: Date.now() };
@@ -1046,21 +1063,62 @@ export default function LivePlayer({
     return () => clearInterval(t);
   }, [isAuto, mode, autoIdx, qOptions.length, log]);
 
+  // Pengatur kecepatan putar (satu-satunya pemilik playbackRate). Menangani dua hal:
+  // 1) Pengguna mempercepat lewat ekstensi (Video Speed Controller dll). Pada siaran live data hanya datang 1 dtk per 1 dtk, jadi
+  //    kecepatan > 1x menguras buffer lalu macet. Solusi: cepat saat buffer cukup, melambat sebentar (isi ulang buffer) saat tipis,
+  //    sehingga rata-rata lebih cepat dari 1x tanpa freeze.
+  // 2) Kecepatan 1x: bila tertinggal dari tepi live, putar sedikit lebih cepat sampai dekat (tanpa loncat).
+  useEffect(() => {
+    const ours = new WeakMap<HTMLVideoElement, number>();
+    const set = (v: HTMLVideoElement, r: number) => {
+      if (Math.abs(v.playbackRate - r) < 0.001) return;
+      ours.set(v, r);
+      v.playbackRate = r;
+    };
+    const onRate = (e: Event) => {
+      const v = e.target as HTMLVideoElement;
+      const mine = ours.get(v);
+      if (mine !== undefined && Math.abs(v.playbackRate - mine) < 0.001) return; // perubahan dari kita sendiri
+      userRateRef.current = v.playbackRate; // dari pengguna/ekstensi
+    };
+    const els = [vidA.current, vidB.current].filter(Boolean) as HTMLVideoElement[];
+    els.forEach((v) => v.addEventListener("ratechange", onRate));
+    let slow = false;
+    let catching = false;
+    const t = setInterval(() => {
+      const v = videoRef.current;
+      if (!v || v.paused || !v.buffered.length || v.seeking) return;
+      const l = Math.max(0, v.buffered.end(v.buffered.length - 1) - v.currentTime);
+      const want = userRateRef.current;
+      if (want > 1.01) {
+        if (!slow && l < 0.4) slow = true;
+        else if (slow && l > 1.3) slow = false;
+        set(v, slow ? 0.75 : want);
+        catching = false;
+        return;
+      }
+      slow = false;
+      const hi = lowLatency ? 1.5 : 2.5;
+      const lo = lowLatency ? 0.8 : 1.5;
+      if (!catching && l > hi) catching = true;
+      else if (catching && l < lo) catching = false;
+      set(v, catching ? (lowLatency ? 1.12 : 1.06) : want);
+    }, 250);
+    return () => {
+      clearInterval(t);
+      els.forEach((v) => v.removeEventListener("ratechange", onRate));
+    };
+  }, [lowLatency]);
+
   // Ukur jeda buffer tiap detik, sekaligus mengejar tepi live otomatis (berlaku untuk FLV maupun HLS):
   // jeda sedang -> putar sedikit lebih cepat; jeda besar -> loncat sekali ke dekat tepi (sisakan bantalan agar tidak loading).
   useEffect(() => {
-    let boosted = false;
     let lastT = -1;
     let stuck = 0;
-    const el = videoRef.current;
     const t = setInterval(() => {
       const v = videoRef.current;
       if (!v || v.paused || !v.buffered.length) {
         stuck = 0;
-        if (v && boosted) {
-          v.playbackRate = 1;
-          boosted = false;
-        }
         return setLag(null);
       }
       const end = v.buffered.end(v.buffered.length - 1);
@@ -1084,20 +1142,9 @@ export default function LivePlayer({
         if (l > 25) v.currentTime = end - 8;
         return;
       }
-      if (l > 5) {
-        v.currentTime = end - 2;
-      } else if (l > 3 && !boosted) {
-        v.playbackRate = 1.08;
-        boosted = true;
-      } else if (l < 1.5 && boosted) {
-        v.playbackRate = 1;
-        boosted = false;
-      }
+      if (l > 5) v.currentTime = end - 2;
     }, 1000);
-    return () => {
-      clearInterval(t);
-      if (el && boosted) el.playbackRate = 1;
-    };
+    return () => clearInterval(t);
   }, [lowLatency]);
   const goLive = () => {
     const v = videoRef.current;
