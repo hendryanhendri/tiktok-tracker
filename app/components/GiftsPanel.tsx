@@ -3,6 +3,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { FaCrown, FaGift } from "react-icons/fa6";
+import LevelBadge from "@/app/components/LevelBadge";
 import Avatar, { colorOf } from "@/app/components/Avatar";
 import { COIN_RATE_IDR } from "@/utils/giftValue";
 
@@ -77,7 +78,7 @@ export default function GiftsPanel({ gifts, className = "h-[22rem]" }: { gifts: 
   ];
 
   return (
-    <section className={`flex flex-col overflow-hidden rounded-2xl border border-line bg-surface backdrop-blur-md ${className}`}>
+    <section className={`flex flex-col overflow-hidden rounded-2xl border border-line bg-surface ${className}`}>
       <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
         <h3 className="flex items-center gap-2 font-semibold">
           <FaGift aria-hidden className="h-4 w-4 text-amber-300" />
@@ -139,6 +140,7 @@ export default function GiftsPanel({ gifts, className = "h-[22rem]" }: { gifts: 
                       <a href={`https://www.tiktok.com/@${g.user}`} target="_blank" rel="noopener noreferrer" className="font-semibold hover:underline" style={{ color: colorOf(g.user) }}>
                         @{g.user}
                       </a>
+                      <LevelBadge level={g.level} className="ml-1 align-middle" />
                       <span className="text-muted"> mengirim </span>
                       <span className="font-medium text-white">{g.gift}</span>
                     </p>

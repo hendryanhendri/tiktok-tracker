@@ -23,15 +23,27 @@ const shortSide = (res?: string) => {
   return m ? Math.min(+m[1], +m[2]) : 0;
 };
 
+/**
+ * Tingkat kualitas TikTok (kunci dari data TikTok) -> nama seperti di menu TikTok. Nama ini nominal: streamer yang siaran 432p
+ * tetap punya tingkat "720p", "540p", "360p" (bedanya di bitrate), jadi jangan digabung hanya karena resolusinya sama.
+ */
+const TIER: Record<string, { rank: number; label: string }> = {
+  origin: { rank: 1081, label: "Original" },
+  uhd: { rank: 1080, label: "1080p" },
+  hd: { rank: 720, label: "720p" },
+  sd: { rank: 540, label: "540p" },
+  ld: { rank: 360, label: "360p" },
+};
+
 /** Cadangan bila tak ada metadata: tebak dari pola nama file (mis. _ld5cr, _sd5cr, _hd, _uhd, tanpa akhiran = asli). */
 function guess(url: string): { rank: number; label: string } | null {
   const file = pathOf(url).split("/").pop() ?? "";
   const m = /_(ld|sd|hd|uhd)\d*[a-z]*\.(?:m3u8|flv)$/i.exec(file);
   if (m) {
     const k = m[1].toLowerCase();
-    return { ld: { rank: 360, label: "Rendah (LD)" }, sd: { rank: 540, label: "SD" }, hd: { rank: 720, label: "HD" }, uhd: { rank: 1080, label: "Full HD" } }[k]!;
+    return TIER[k];
   }
-  if (/_or\d/i.test(file) || /^stream-\d+\.(?:m3u8|flv)$/i.test(file)) return { rank: 1081, label: "Asli (Origin)" };
+  if (/_or\d/i.test(file) || /^stream-\d+\.(?:m3u8|flv)$/i.test(file)) return TIER.origin;
   return null;
 }
 
@@ -50,11 +62,14 @@ export function buildQualities(urls: string[], meta: Record<string, Meta> = {}):
     const md = meta[pathOf(url)];
     const h = shortSide(md?.res);
     const g = guess(url);
-    const base = h
-      ? { rank: h, label: `${h}p`, height: h }
-      : g
-        ? { rank: g.rank, label: g.label }
-        : { rank: 1500 + ++unknown, label: `Kualitas ${unknown}` };
+    const tier = md?.key ? TIER[md.key.toLowerCase()] : undefined; // utamakan nama tingkat TikTok
+    const base = tier
+      ? { rank: tier.rank, label: tier.label, height: h || undefined }
+      : h
+        ? { rank: h, label: `${h}p`, height: h }
+        : g
+          ? { rank: g.rank, label: g.label }
+          : { rank: 1500 + ++unknown, label: `Kualitas ${unknown}` };
     const prev = byLabel.get(base.label);
     if (prev) prev.all.push(url);
     else byLabel.set(base.label, { ...base, all: [url] });

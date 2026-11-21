@@ -14,11 +14,12 @@
  * - Hanya mendengarkan 127.0.0.1 (tanpa autentikasi, jangan dibuka ke jaringan).
  */
 import http from "node:http";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { TikTokLiveConnection, WebcastEvent, ControlEvent, RouteConfig } from "tiktok-live-connector";
 import { buildQualities, collectStreams } from "../app/lib/streams";
 import { COIN_RATE_IDR } from "../utils/giftValue";
+import { GIFT_CATALOG, type KnownGift } from "../utils/giftCatalog";
 
 /* ---------- .env sederhana (tanpa dependensi) ---------- */
 try {
@@ -62,6 +63,66 @@ const firstUrl = (x: any): string | undefined => {
   const list: string[] = x?.urls ?? x?.urlList ?? x?.url_list ?? (Array.isArray(x) ? x : []);
   return list.find((u) => typeof u === "string" && !/\.heic(\?|$)/i.test(u)) ?? list[0];
 };
+/** URL gambar dari berbagai bentuk data TikTok: {urlList}/{url_list}/{urls}, {giftPictureUrl}, {url: [..]|".."}, atau string. */
+const imgUrl = (x: any): string | undefined => {
+  if (!x) return undefined;
+  if (typeof x === "string") return x;
+  const direct = firstUrl(x);
+  if (direct) return direct;
+  if (typeof x.giftPictureUrl === "string" && x.giftPictureUrl) return x.giftPictureUrl;
+  if (typeof x.url === "string" && x.url) return x.url;
+  if (Array.isArray(x.url)) return x.url.find((u: unknown) => typeof u === "string");
+  return undefined;
+};
+/* ---------- Info gift ---------- */
+// Event gift sering tanpa nama/gambar/harga. Sumber, urut prioritas: detail di event -> katalog bawaan (utils/giftCatalog.ts)
+// -> gift yang pernah eventnya lengkap (diingat di memori + .gift-cache.json).
+const CACHE_FILE = ".gift-cache.json";
+const learned = new Map<number, KnownGift>();
+try {
+  for (const [id, g] of Object.entries(JSON.parse(readFileSync(CACHE_FILE, "utf8")) as Record<string, KnownGift>)) learned.set(Number(id), g);
+} catch {
+  /* belum ada cache */
+}
+function giftInfo(d: any): { name?: string; icon?: string; unitCoins: number; streak: boolean } {
+  const id = Number(d.giftId);
+  const gd = d.giftDetails ?? {};
+  const g = d.gift ?? {}; // detail lengkap gift (nama, ikon, harga) ada di d.gift pada pesan TikTok terbaru
+  const x = d.extendedGiftInfo ?? {};
+  const fromEvent: KnownGift = {
+    name: g.name || gd.giftName || d.giftName || x.name || undefined,
+    icon: imgUrl(g.icon) ?? imgUrl(g.image) ?? imgUrl(gd.giftImage) ?? imgUrl(gd.image) ?? imgUrl(gd.icon) ?? imgUrl(x.image) ?? imgUrl(x.icon) ?? imgUrl(d.giftPictureUrl),
+    coins: Number(g.diamondCount ?? gd.diamondCount ?? d.diamondCount ?? x.diamond_count ?? x.diamondCount) || undefined,
+    streak: g.type === 1 || gd.giftType === 1 ? true : undefined,
+  } as KnownGift;
+  const known = GIFT_CATALOG[id] ?? learned.get(id);
+  // Ingat gift yang eventnya membawa detail lengkap, agar event berikutnya tanpa detail tetap bernama dan bergambar.
+  if (id && fromEvent.name && !GIFT_CATALOG[id] && JSON.stringify(learned.get(id)) !== JSON.stringify(fromEvent)) {
+    learned.set(id, { ...learned.get(id), ...fromEvent });
+    try {
+      writeFileSync(CACHE_FILE, JSON.stringify(Object.fromEntries(learned), null, 1));
+    } catch {
+      /* abaikan */
+    }
+  }
+  return {
+    name: fromEvent.name ?? known?.name,
+    icon: fromEvent.icon ?? known?.icon,
+    unitCoins: fromEvent.coins ?? known?.coins ?? 0,
+    streak: g.type === 1 || gd.giftType === 1 || !!known?.streak,
+  };
+}
+/** Level penonton/gifter: dari payGrade.level; cadangan, dari nama file badge level (mis. "grade_badge_icon_lite_lv25_v1.png"). 0 = tidak diketahui. */
+const userLevel = (u: any): number => {
+  const pg = Number(u?.payGrade?.level) || 0;
+  if (pg > 0) return pg;
+  try {
+    const m = /grade_badge[^"\s]*?_lv(\d{1,3})/i.exec(JSON.stringify([u?.badgeImageList, u?.badgeList]));
+    return m ? Number(m[1]) : 0;
+  } catch {
+    return 0;
+  }
+};
 const userName = (u: any): string => u?.uniqueId ?? u?.nickname ?? "unknown";
 const userAvatar = (u: any) =>
   firstUrl(u?.profilePicture) ?? firstUrl(u?.avatarThumb) ?? firstUrl(u?.avatarMedium) ?? firstUrl(u?.avatarLarge);
@@ -84,29 +145,36 @@ async function startSession(username: string): Promise<Session> {
 
     connection.on(WebcastEvent.CHAT, (d: any) => {
       if (!isActive()) return;
-      broadcast({ type: "comment", user: userName(d.user), text: d.comment ?? d.content ?? "", avatar: userAvatar(d.user) });
+      broadcast({
+        type: "comment",
+        user: userName(d.user),
+        text: d.comment ?? d.content ?? "",
+        avatar: userAvatar(d.user),
+        level: userLevel(d.user), // level penonton TikTok (0 = tidak diketahui)
+      });
     });
 
     connection.on(WebcastEvent.GIFT, (d: any) => {
+      const info = giftInfo(d);
       // Gift streak (type 1): hitung hanya saat streak selesai agar tidak dobel.
-      if (d.giftDetails?.giftType === 1 && !d.repeatEnd) return;
-      const name: string = d.giftDetails?.giftName ?? `Gift #${d.giftId}`;
+      if (info.streak && !d.repeatEnd) return;
+      const name: string = info.name || `Gift #${d.giftId}`;
       const count: number = d.repeatCount || 1;
       const t = session.gifts.get(name) ?? { name, count: 0, totalCoin: 0 };
       t.count += count;
-      t.totalCoin += (d.giftDetails?.diamondCount ?? 0) * count;
+      t.totalCoin += info.unitCoins * count;
       session.gifts.set(name, t);
       if (isActive()) {
-        const gd = d.giftDetails ?? {};
         broadcast({
           type: "gift",
           user: userName(d.user),
           gift: name,
+          giftId: Number(d.giftId) || undefined,
           count,
-          coins: (Number(gd.diamondCount) || 0) * count, // nilai koin total (jumlah x harga)
-          icon: firstUrl(gd.giftImage) ?? firstUrl(gd.image) ?? firstUrl(gd.icon) ?? (typeof gd.giftPictureUrl === "string" ? gd.giftPictureUrl : undefined),
+          coins: info.unitCoins * count, // nilai koin total (jumlah x harga)
+          icon: info.icon,
           avatar: userAvatar(d.user),
-          level: Number(d.user?.payGrade?.level) || 0, // level gifter TikTok (0 = tidak diketahui)
+          level: userLevel(d.user), // level gifter TikTok (0 = tidak diketahui)
         });
       }
     });
@@ -120,9 +188,20 @@ async function startSession(username: string): Promise<Session> {
         broadcast({ type: "viewer", viewerCount, totalViews: num(d.totalUser) ?? 0 });
       }
     });
-    connection.on(WebcastEvent.STREAM_END, () => isActive() && setStatus("ended"));
+    connection.on(WebcastEvent.STREAM_END, () => {
+      if (isActive()) setStatus("ended");
+    });
     connection.on(ControlEvent.DISCONNECTED, () => {
-      if (isActive() && currentStatus !== "ended") setStatus("disconnected");
+      if (!isActive() || currentStatus === "ended") return;
+      setStatus("disconnected");
+      // Putus tanpa pesan "live berakhir"? Cek ke TikTok; kalau memang sudah tidak live, tandai berakhir.
+      setTimeout(async () => {
+        try {
+          if (isActive() && currentStatus !== "ended" && !(await getRoom(username)).isLive) setStatus("ended");
+        } catch {
+          /* gagal cek: biarkan status "terputus" */
+        }
+      }, 3000);
     });
     connection.on(ControlEvent.ERROR, (e: any) => console.error(`[${username}] error:`, e?.message ?? e));
 

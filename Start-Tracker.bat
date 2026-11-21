@@ -42,9 +42,15 @@ if not exist "node_modules\next" (
   )
 )
 
-rem --- 3. Build (hanya pertama kali / setelah update) ---
-if not exist ".next\BUILD_ID" (
-  echo [..] Membangun aplikasi ^(pertama kali, beberapa menit^)...
+rem --- 3. Build (pertama kali, atau otomatis bila ada file kode lebih baru dari build terakhir) ---
+set "NEED_BUILD=0"
+if not exist ".next\BUILD_ID" set "NEED_BUILD=1"
+if "%NEED_BUILD%"=="0" (
+  powershell -NoProfile -Command "$b=(Get-Item '.next\BUILD_ID').LastWriteTime; $n=Get-ChildItem app,server,utils,public -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $b } | Select-Object -First 1; if ($n) { exit 1 } else { exit 0 }"
+  if errorlevel 1 set "NEED_BUILD=1"
+)
+if "%NEED_BUILD%"=="1" (
+  echo [..] Membangun aplikasi ^(pertama kali atau setelah update, beberapa menit^)...
   call npm run build
   if errorlevel 1 (
     echo [GAGAL] Build gagal.

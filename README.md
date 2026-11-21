@@ -9,6 +9,10 @@ Download/clone project, lalu **klik dua kali `Start-Tracker.bat`**. Pertama kali
 mengunduh Node.js portable (jika belum terpasang), memasang dependency, dan build — butuh internet
 dan beberapa menit. Setelah itu browser terbuka ke `http://localhost:3000`. Run berikutnya langsung cepat.
 
+> **Update kode:** kedua launcher (Windows dan macOS) membandingkan file kode dengan build terakhir. Jika ada yang lebih baru
+> (misalnya setelah mengganti file dengan versi baru), aplikasi dibangun ulang otomatis; jika tidak, langsung jalan.
+> Setelah update, jalankan ulang juga backend-nya (launcher sudah menjalankan keduanya sekaligus).
+
 ### macOS
 
 **Paling mudah (tanpa peringatan Apple):** buka **Terminal**, tempel satu baris ini, lalu Enter.

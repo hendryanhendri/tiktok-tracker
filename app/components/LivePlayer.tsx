@@ -25,9 +25,11 @@ import {
   FaCircleDot,
   FaStop,
   FaGift,
+  FaVideoSlash,
 } from "react-icons/fa6";
 import type { IconType } from "react-icons";
 import { API_URL } from "@/app/lib/config";
+import LevelBadge from "@/app/components/LevelBadge";
 
 export type Quality = {
   id: string;
@@ -54,27 +56,6 @@ function friendlyQuality(q: Quality): string {
   if (/\bsd\b/i.test(l)) return "540p";
   if (/\bld\b|rendah/i.test(l)) return "360p";
   return l;
-}
-
-/**
- * Paling banyak tiga opsi: Original (tertinggi) + dua di bawahnya, diutamakan yang paling dekat 720p dan 540p.
- * Bila salah satunya tidak tersedia, diisi kualitas di bawahnya secara berurutan. Hasil urut tertinggi -> terendah.
- */
-function pickThree(qs: Quality[]): Quality[] {
-  const desc = [...qs].reverse();
-  if (desc.length <= 3) return desc;
-  const [top, ...rest] = desc;
-  const chosen: Quality[] = [];
-  for (const want of [720, 540]) {
-    const hit = rest.find((q) => parseInt(friendlyQuality(q), 10) === want && !chosen.includes(q));
-    if (hit) chosen.push(hit);
-  }
-  for (const q of rest) {
-    if (chosen.length >= 2) break;
-    if (!chosen.includes(q)) chosen.push(q);
-  }
-  chosen.sort((x, y) => desc.indexOf(x) - desc.indexOf(y));
-  return [top, ...chosen];
 }
 
 const fmtBytes = (n: number) => (n > 1e9 ? `${(n / 1e9).toFixed(2)} GB` : n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`);
@@ -117,8 +98,25 @@ function MenuRow({
   );
 }
 
-type GiftEvent = { id: number; user?: string; gift?: string; count?: number; icon?: string; avatar?: string; level?: number };
+type GiftEvent = { key?: string; coins?: number; id: number; user?: string; gift?: string; count?: number; icon?: string; avatar?: string; level?: number };
 const GIFT_POPUP_MS = 6000;
+const BIG_GIFT_COINS = 1000; // gift senilai >= ini memicu efek besar; >= 10.000 efek lebih lama (mega)
+const GIFT_SIZE = "clamp(18px, 7cqw, 28px)"; // ukuran avatar/gambar gift, mengikuti lebar gambar video
+
+/** Gambar gift; bila tidak ada/gagal dimuat, tampil ikon hadiah. Ukuran mengikuti lebar gambar video (satuan cqw). */
+function GiftThumb({ src, size }: { src?: string; size: string }) {
+  const [broken, setBroken] = useState(false);
+  if (!src || broken) {
+    return (
+      <span className="flex shrink-0 items-center justify-center rounded-md bg-amber-400/15" style={{ width: size, height: size }}>
+        <FaGift aria-hidden className="h-1/2 w-1/2 text-amber-300" />
+      </span>
+    );
+  }
+  return (
+    <img src={src} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} className="shrink-0 object-contain drop-shadow" style={{ width: size, height: size }} />
+  );
+}
 
 export default function LivePlayer({
   qualities,
@@ -127,6 +125,9 @@ export default function LivePlayer({
   initialMode = "video",
   plain = false,
   gifts,
+  ended = false,
+  onClose,
+  onLayoutChange,
 }: {
   qualities: Quality[];
   username?: string;
@@ -136,6 +137,12 @@ export default function LivePlayer({
   plain?: boolean;
   /** Daftar gift dari tracker (bila ada): ditampilkan sebagai notifikasi di atas video. */
   gifts?: GiftEvent[];
+  /** Live sudah berakhir (kabar dari server): pemutar dihentikan dan layar "Live telah berakhir" ditampilkan. */
+  ended?: boolean;
+  /** Tampilan polos: tombol Tutup di dalam pemutar (pojok kiri atas), karena form di atas disembunyikan. */
+  onClose?: () => void;
+  /** Dikabari saat bentuk tampilan berubah (lebar/mobile), agar halaman menyesuaikan tata letak di sekitarnya. */
+  onLayoutChange?: (layout: Layout) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -144,11 +151,20 @@ export default function LivePlayer({
   const videoQ = qualities.filter((q) => !q.audioOnly);
   const audioQ = qualities.find((q) => q.audioOnly);
   const lowestVideo = videoQ[0];
-  const qOptions = pickThree(videoQ); // tiga opsi saja: Original + dua di bawahnya (utamanya 720p dan 540p)
+  // Seperti menu TikTok: Auto, Original, lalu tingkat di bawahnya (720p, 540p, 360p). Urut tertinggi -> terendah.
+  const qOptions = [...videoQ].reverse();
   const qNames = new Map(qOptions.map((q, i) => [q.id, i === 0 ? "Original" : friendlyQuality(q)]));
+  // Auto dimulai dari tingkat 720p (seperti TikTok); bila ada tersendat berulang, turun satu tingkat.
+  const autoStart = (() => {
+    const i = qOptions.findIndex((q) => parseInt(friendlyQuality(q), 10) === 720);
+    return i >= 0 ? i : qOptions.length > 1 ? 1 : 0;
+  })();
 
   const [mode, setMode] = useState<Mode>(initialMode);
   const [videoId, setVideoId] = useState(videoQ.at(-1)?.id ?? qualities.at(-1)?.id ?? "");
+  const [isAuto, setIsAuto] = useState(true); // pilihan "Auto" (default, seperti TikTok)
+  const [autoIdx, setAutoIdx] = useState(autoStart);
+  const autoBaseRef = useRef({ n: 0, t: 0 });
   const [useProxy, setUseProxy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<"main" | "quality">("main");
@@ -171,6 +187,31 @@ export default function LivePlayer({
   });
   const [giftPopups, setGiftPopups] = useState<GiftEvent[]>([]);
   const seenGiftRef = useRef<number | null>(null);
+  // Efek gift besar: antrean (maks 3), diputar satu per satu.
+  const [bigGift, setBigGift] = useState<GiftEvent | null>(null);
+  const bigQueueRef = useRef<GiftEvent[]>([]);
+  const bigBusyRef = useRef(false);
+  const bigTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playNextBig = useCallback(() => {
+    const next = bigQueueRef.current.shift();
+    if (!next) {
+      bigBusyRef.current = false;
+      setBigGift(null);
+      return;
+    }
+    bigBusyRef.current = true;
+    setBigGift(next);
+    bigTimerRef.current = setTimeout(playNextBig, (next.coins ?? 0) >= 10000 ? 7000 : 4500);
+  }, []);
+  const enqueueBig = useCallback(
+    (g: GiftEvent) => {
+      if (bigQueueRef.current.length < 3) bigQueueRef.current.push(g);
+      if (!bigBusyRef.current) playNextBig();
+    },
+    [playNextBig],
+  );
+  useEffect(() => () => void (bigTimerRef.current && clearTimeout(bigTimerRef.current)), []);
+  const popupTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   useEffect(() => {
     if (!gifts) return;
     const maxId = gifts.reduce((m, g) => Math.max(m, g.id), 0);
@@ -181,9 +222,32 @@ export default function LivePlayer({
     const fresh = gifts.filter((g) => g.id > (seenGiftRef.current ?? 0));
     seenGiftRef.current = maxId;
     if (!fresh.length) return;
-    setGiftPopups((p) => [...p, ...fresh].slice(-4));
-    for (const g of fresh) setTimeout(() => setGiftPopups((p) => p.filter((x) => x.id !== g.id)), GIFT_POPUP_MS);
-  }, [gifts]);
+    for (const g of fresh) if ((g.coins ?? 0) >= BIG_GIFT_COINS) enqueueBig(g);
+    // Pengirim + gift yang sama digabung jadi satu notifikasi (jumlah dijumlahkan), maksimal 2 notifikasi sekaligus.
+    setGiftPopups((prev) => {
+      const next = [...prev];
+      for (const g of fresh) {
+        const key = `${g.user}|${g.gift}`;
+        const n = g.count ?? 1;
+        const i = next.findIndex((x) => x.key === key);
+        if (i >= 0) next[i] = { ...next[i], count: (next[i].count ?? 1) + n, icon: next[i].icon || g.icon };
+        else next.push({ ...g, key, count: n });
+      }
+      return next.slice(-2);
+    });
+    for (const g of fresh) {
+      const key = `${g.user}|${g.gift}`;
+      const old = popupTimersRef.current.get(key);
+      if (old) clearTimeout(old);
+      popupTimersRef.current.set(
+        key,
+        setTimeout(() => {
+          popupTimersRef.current.delete(key);
+          setGiftPopups((p) => p.filter((x) => x.key !== key));
+        }, GIFT_POPUP_MS),
+      );
+    }
+  }, [gifts, enqueueBig]);
   const toggleGiftOverlay = () => {
     const next = !giftOverlay;
     setGiftOverlay(next);
@@ -242,7 +306,9 @@ export default function LivePlayer({
 
   // Mode audio: format audio saja bila ada, kalau tidak video kualitas terendah (hemat data).
   const selected =
-    mode === "audio" ? (audioQ ?? lowestVideo ?? qualities[0]) : (videoQ.find((q) => q.id === videoId) ?? videoQ.at(-1) ?? qualities[0]);
+    mode === "audio"
+      ? (audioQ ?? lowestVideo ?? qualities[0])
+      : ((isAuto ? qOptions[Math.min(autoIdx, qOptions.length - 1)] : videoQ.find((q) => q.id === videoId)) ?? videoQ.at(-1) ?? qualities[0]);
   const candidates = selected ? [selected.url, ...(selected.alts ?? [])] : [];
   const baseUrl = candidates[variant] ?? selected?.url ?? "";
   const src = baseUrl ? (useProxy ? `${API_URL}/proxy?u=${encodeURIComponent(baseUrl)}` : baseUrl) : "";
@@ -251,7 +317,7 @@ export default function LivePlayer({
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!src || !video) return;
+    if (!src || !video || ended) return;
     setLoading(true);
     setFailed(false);
     setFailReason(null);
@@ -517,7 +583,11 @@ export default function LivePlayer({
       if (noVideoTimer) clearTimeout(noVideoTimer);
       destroy?.();
     };
-  }, [src, useProxy, variant, candidates.length, log, lowLatency]);
+  }, [src, useProxy, variant, candidates.length, log, lowLatency, ended]);
+  // Live berakhir: hentikan suara/gambar (pemutar sudah dibongkar oleh efek di atas).
+  useEffect(() => {
+    if (ended) videoRef.current?.pause();
+  }, [ended]);
 
   const copyDiagnosis = async () => {
     const v = videoRef.current;
@@ -576,6 +646,11 @@ export default function LivePlayer({
     if (!v || recorderRef.current?.state === "recording") return;
     const cap = (v as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
     if (!cap || typeof MediaRecorder === "undefined") return setRecMsg("Browser ini tidak mendukung perekaman.");
+    // Suara mati karena autoplay (bukan pilihan pengguna): klik "Rekam" adalah interaksi pengguna, jadi boleh dinyalakan agar suara ikut terekam.
+    if (v.muted && autoMuted) {
+      v.muted = false;
+      setAutoMuted(false);
+    }
     if (v.muted)
       return setRecMsg(
         "Suara video sedang mati, hasil rekaman akan tanpa suara. Nyalakan suara dulu (klik 'Suara mati' di pemutar), lalu rekam lagi.",
@@ -586,7 +661,8 @@ export default function LivePlayer({
     const wanted =
       kind === "audio"
         ? ["audio/mp4;codecs=mp4a.40.2", "audio/webm;codecs=opus", "audio/webm"]
-        : ["video/mp4;codecs=avc1.640028,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
+        : // avc1.640033 = High L5.1: perlu untuk video besar (mis. 1440x2560); level 4.0 gagal mengodekan ukuran sebesar itu.
+          ["video/mp4;codecs=avc1.640033,mp4a.40.2", "video/mp4;codecs=avc1.640028,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
     const mime = wanted.find((m) => MediaRecorder.isTypeSupported(m)) ?? "";
     const isMp4 = mime.startsWith("video/mp4") || mime.startsWith("audio/mp4");
     const ext = kind === "audio" ? (isMp4 ? "m4a" : "webm") : isMp4 ? "mp4" : "webm";
@@ -619,11 +695,23 @@ export default function LivePlayer({
       }
     }
 
-    const mr = new MediaRecorder(new MediaStream(tracks), {
-      ...(mime ? { mimeType: mime } : {}),
-      videoBitsPerSecond: 4_000_000,
-      audioBitsPerSecond: 128_000,
-    });
+    // Bitrate mengikuti ukuran gambar: ~4 Mbps untuk 720p, sampai 12 Mbps untuk 1440p.
+    const px = (v.videoWidth || 720) * (v.videoHeight || 1280);
+    let mr: MediaRecorder;
+    try {
+      mr = new MediaRecorder(new MediaStream(tracks), {
+        ...(mime ? { mimeType: mime } : {}),
+        videoBitsPerSecond: Math.round(Math.min(12_000_000, Math.max(2_500_000, px * 4.3))),
+        audioBitsPerSecond: 128_000,
+      });
+    } catch (err) {
+      try {
+        await writable?.abort();
+      } catch {
+        /* abaikan */
+      }
+      return setRecMsg(`Perekam tidak bisa dibuat (${(err as Error).message}). Coba turunkan kualitas video lalu rekam lagi.`);
+    }
     const chunks: Blob[] = [];
     let chain: Promise<unknown> = Promise.resolve();
     recBytesRef.current = 0;
@@ -663,9 +751,22 @@ export default function LivePlayer({
         setRec(null);
       }
     };
-    mr.onerror = () => setRecMsg("Perekaman terhenti karena error.");
+    mr.onerror = (ev) => {
+      const detail = (ev as unknown as { error?: { message?: string } }).error?.message;
+      setRecMsg(`Perekaman terhenti karena error${detail ? `: ${detail}` : ""}. Bila video sangat besar, turunkan kualitas (mis. 720p) lalu coba lagi.`);
+    };
     recorderRef.current = mr;
-    mr.start(1000);
+    try {
+      mr.start(1000);
+    } catch (err) {
+      recorderRef.current = null;
+      try {
+        await writable?.abort();
+      } catch {
+        /* abaikan */
+      }
+      return setRecMsg(`Perekaman gagal dimulai: ${(err as Error).message}`);
+    }
     setNow(Date.now());
     setRec({ kind, startedAt: Date.now(), toDisk: !!writable });
   };
@@ -746,6 +847,26 @@ export default function LivePlayer({
     if (x > 0) setAutoMuted(false);
   };
 
+  // Auto: bila tersendat >= 3 kali dalam 30 detik, turun satu tingkat kualitas (tidak naik lagi agar tidak bolak-balik).
+  useEffect(() => {
+    if (!isAuto || mode === "audio") return;
+    const t = setInterval(() => {
+      const n = statsRef.current.waiting + statsRef.current.stalled;
+      const base = autoBaseRef.current;
+      if (n < base.n) {
+        autoBaseRef.current = { n, t: Date.now() }; // statistik di-reset saat pemutar dimulai ulang
+        return;
+      }
+      if (Date.now() - base.t > 30000) autoBaseRef.current = { n, t: Date.now() };
+      else if (n - base.n >= 3 && autoIdx < qOptions.length - 1) {
+        log(`Auto: tersendat ${n - base.n}x, turun ke kualitas lebih rendah`);
+        autoBaseRef.current = { n, t: Date.now() };
+        setAutoIdx(autoIdx + 1);
+      }
+    }, 5000);
+    return () => clearInterval(t);
+  }, [isAuto, mode, autoIdx, qOptions.length, log]);
+
   // Ukur jeda buffer tiap detik.
   useEffect(() => {
     const t = setInterval(() => {
@@ -791,9 +912,18 @@ export default function LivePlayer({
     setVariant(0);
     setUseProxy(false);
   };
+  const chooseAuto = () => {
+    giveUpVideoRef.current = false;
+    setNoVideo(false);
+    setIsAuto(true);
+    setAutoIdx(autoStart);
+    setVariant(0);
+    setUseProxy(false);
+  };
   const changeQuality = (id: string) => {
     giveUpVideoRef.current = false;
     setNoVideo(false);
+    setIsAuto(false);
     setVideoId(id);
     setVariant(0);
     setUseProxy(false);
@@ -811,11 +941,29 @@ export default function LivePlayer({
     const r = m ? Number(m[1]) / Number(m[2]) : 9 / 16;
     return r < 1 ? Math.min(Math.max(r, 0.4), 0.75) : 9 / 16;
   })();
-  const effLayout: Layout = layoutUser ?? (plain && portrait ? "mobile" : "wide"); // otomatis: mode polos mengikuti bentuk video
+  // Rasio gambar video yang sebenarnya (apa pun orientasinya), untuk menaruh notifikasi tepat di atas gambar, bukan di pita hitam.
+  const realRatio = (() => {
+    const m = /^(\d+)×(\d+)$/.exec(dims ?? "");
+    return m && Number(m[2]) > 0 ? Number(m[1]) / Number(m[2]) : 16 / 9;
+  })();
+  const effLayout: Layout = layoutUser ?? (portrait ? "mobile" : "wide"); // otomatis: mengikuti bentuk video (potret -> mobile)
+  useEffect(() => {
+    onLayoutChange?.(effLayout);
+  }, [effLayout, onLayoutChange]);
+  // Mode mobile: kartu sendiri menyempit seukuran layar ponsel (bukan hanya videonya), sisa ruang dipakai halaman (mis. untuk chat).
+  const mobileCardStyle =
+    effLayout === "mobile" && !isFs
+      ? {
+          width: plain ? `calc((100dvh - 6.5rem) * ${vidRatio})` : `max(22rem, calc((100dvh - 17rem) * ${vidRatio}))`,
+          maxWidth: "100%",
+          marginInline: "auto",
+        }
+      : undefined;
   const audioUI = audioMode || noVideoUi; // tampilan panel audio (dipilih pengguna, atau stream memang tanpa gambar)
 
   return (
     <div
+      style={mobileCardStyle}
       className={
         plain ? "overflow-hidden rounded-xl bg-black" : "overflow-hidden rounded-2xl border border-line bg-surface shadow-xl backdrop-blur-md"
       }
@@ -859,7 +1007,7 @@ export default function LivePlayer({
               ) : (
                 <button
                   type="button"
-                  onClick={startRecording}
+                  onClick={() => void startRecording().catch((err) => setRecMsg(`Perekaman gagal: ${(err as Error).message}`))}
                   disabled={loading || failed}
                   title={mode === "audio" ? "Rekam audio saja" : "Rekam video + audio"}
                   className="flex items-center gap-2 rounded-lg border border-line bg-white/5 px-3 py-2 text-xs transition hover:bg-white/10"
@@ -920,7 +1068,14 @@ export default function LivePlayer({
       {/* Stage */}
       {failed ? (
         <div className="flex aspect-video flex-col items-center justify-center gap-3 bg-black px-6 text-center">
-          <FaTriangleExclamation aria-hidden className="h-6 w-6 text-amber-300" />
+          {/HTTP (403|404|410)/.test(failReason ?? "") ? (
+            <>
+              <FaVideoSlash aria-hidden className="h-7 w-7 text-white/70" />
+              <p className="text-base font-semibold text-white">Live telah berakhir</p>
+            </>
+          ) : (
+            <FaTriangleExclamation aria-hidden className="h-6 w-6 text-amber-300" />
+          )}
           <p className="text-sm text-muted">
             {failReason ??
               "Tidak bisa diputar. URL mungkin sudah kedaluwarsa (live berakhir atau terlalu lama). Ambil ulang dengan bookmarklet, atau coba kualitas lain."}
@@ -943,7 +1098,7 @@ export default function LivePlayer({
           onTouchStart={pokeControls}
           onMouseLeave={() => playing && !menuOpen && setCtlVisible(false)}
           // Mobile: lebar mengikuti tinggi (maks 78vh) agar panggung pas dengan videonya, tanpa pita hitam di sisi.
-          style={!isFs && effLayout === "mobile" ? { aspectRatio: String(vidRatio), width: `min(100%, calc(78vh * ${vidRatio}))` } : undefined}
+          style={!isFs && effLayout === "mobile" ? { aspectRatio: String(vidRatio), width: "100%", maxWidth: `calc((100dvh - ${plain ? "6.5rem" : "17rem"}) * ${vidRatio})` } : undefined}
           className={`group relative bg-black ${isFs ? "h-screen w-screen" : effLayout === "mobile" ? "mx-auto" : "aspect-video"}`}
         >
           {/* Elemen video tetap ada di mode audio agar suara terus diputar */}
@@ -951,7 +1106,6 @@ export default function LivePlayer({
             ref={videoRef}
             autoPlay
             playsInline
-            disablePictureInPicture
             onClick={audioUI ? undefined : togglePlay}
             className={audioUI ? "sr-only" : "h-full w-full cursor-pointer bg-black object-contain"}
           />
@@ -1001,6 +1155,23 @@ export default function LivePlayer({
               >
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" /> LIVE
               </button>
+            </div>
+          )}
+          {plain && onClose && (
+            <div
+              className={`absolute left-4 top-4 z-20 flex items-center gap-2 transition-opacity duration-200 ${
+                audioUI || ctlVisible || !playing || menuOpen ? "opacity-100" : "pointer-events-none opacity-0"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={onClose}
+                title="Tutup live"
+                className="flex items-center gap-2 rounded-full bg-rose-600/90 px-4 py-2 text-sm font-semibold text-white backdrop-blur transition hover:bg-rose-500"
+              >
+                <FaStop aria-hidden className="h-3 w-3" /> Tutup
+              </button>
+              {username && <span className="rounded-full bg-black/55 px-3 py-2 text-sm font-medium text-white backdrop-blur">@{username}</span>}
             </div>
           )}
           {/* Pengaturan di dalam pemutar (gaya TikTok): menu utama + panel kualitas di sampingnya */}
@@ -1053,7 +1224,7 @@ export default function LivePlayer({
                     <MenuRow
                       icon={FaSliders}
                       label="Kualitas"
-                      value={qNames.get(selected?.id ?? "") ?? "Original"}
+                      value={isAuto ? `Auto (${qNames.get(selected?.id ?? "") ?? "Original"})` : (qNames.get(selected?.id ?? "") ?? "Original")}
                       chevron
                       active={menuView === "quality"}
                       onClick={() => setMenuView((v) => (v === "quality" ? "main" : "quality"))}
@@ -1087,6 +1258,27 @@ export default function LivePlayer({
                       valueAccent={giftOverlay}
                       onClick={() => {
                         toggleGiftOverlay();
+                        setMenuOpen(false);
+                      }}
+                    />
+                  )}
+                  {gifts && giftOverlay && (
+                    <MenuRow
+                      icon={FaGift}
+                      label="Contoh efek gift besar"
+                      onClick={() => {
+                        // Contoh: pakai gift/pengirim terakhir yang benar-benar masuk bila ada; kalau belum ada, gambar mawar.
+                        const last = [...(gifts ?? [])].reverse().find((g) => g.icon) ?? gifts?.at(-1);
+                        enqueueBig({
+                          id: Date.now(),
+                          user: last?.user ?? username ?? "penonton",
+                          avatar: last?.avatar,
+                          level: last?.level ?? 42,
+                          gift: last?.gift ?? "Contoh gift besar",
+                          icon: last?.icon ?? "https://p16-webcast.tiktokcdn.com/img/maliva/webcast-va/eba3a9bb85c33e017f3648eaf88d7189~tplv-obj.png",
+                          count: 1,
+                          coins: 29999,
+                        });
                         setMenuOpen(false);
                       }}
                     />
@@ -1138,9 +1330,22 @@ export default function LivePlayer({
                     >
                       <FaChevronLeft aria-hidden className="h-3.5 w-3.5" /> Kualitas
                     </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={isAuto}
+                      onClick={() => {
+                        chooseAuto();
+                        setMenuOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between gap-3 rounded-xl px-5 py-3.5 text-left transition hover:bg-white/10 ${isAuto ? "font-semibold" : "text-white/85"}`}
+                    >
+                      <span>Auto ({qNames.get(qOptions[Math.min(isAuto ? autoIdx : autoStart, qOptions.length - 1)]?.id ?? "") ?? "Original"})</span>
+                      {isAuto && <FaCheck aria-hidden className="h-4 w-4 text-white" />}
+                    </button>
                     {qOptions.map((q) => {
                       const name = qNames.get(q.id) ?? q.label;
-                      const active = q.id === selected?.id;
+                      const active = !isAuto && q.id === selected?.id;
                       return (
                         <button
                           key={q.id}
@@ -1242,38 +1447,112 @@ export default function LivePlayer({
               </div>
             </div>
           )}
-          {giftOverlay && giftPopups.length > 0 && (
-            <div
-              aria-live="polite"
-              className={`pointer-events-none absolute left-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2 ${audioUI ? "bottom-3" : "bottom-16"}`}
-            >
-              {giftPopups.map((g) => (
-                <div key={g.id} className="flex items-center gap-2 rounded-full bg-black/60 py-1 pl-1 pr-3 text-sm text-white shadow-lg backdrop-blur">
-                  {g.avatar ? (
-                    <img src={g.avatar} alt="" referrerPolicy="no-referrer" className="h-8 w-8 rounded-full object-cover" />
-                  ) : (
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/15">
-                      <FaGift aria-hidden className="h-4 w-4 text-amber-300" />
-                    </span>
-                  )}
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-1.5 text-xs font-semibold leading-tight">
-                      <span className="max-w-[8rem] truncate">{g.user ?? "Seseorang"}</span>
-                      {!!g.level && g.level > 0 && (
-                        <span
-                          title={`Level gifter ${g.level}`}
-                          className={`shrink-0 rounded px-1 py-px text-[10px] font-bold leading-none ${g.level >= 40 ? "bg-rose-500" : g.level >= 20 ? "bg-violet-500" : "bg-sky-600"}`}
-                        >
-                          Lv {g.level}
+          {giftOverlay && (giftPopups.length > 0 || bigGift) && (
+            // Area notifikasi mengikuti posisi asli gambar video (object-contain), bukan seluruh panggung.
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center" style={{ containerType: "size" }}>
+              <div
+                aria-live="polite"
+                className="relative"
+                style={
+                  audioUI
+                    ? { width: "100%", height: "100%", containerType: "inline-size" }
+                    : { aspectRatio: String(realRatio), width: `min(100cqw, calc(100cqh * ${realRatio}))`, containerType: "inline-size" }
+                }
+              >
+                {bigGift && (
+                  <div
+                    key={bigGift.id}
+                    className="gift-big absolute inset-0 flex flex-col items-center justify-center overflow-hidden"
+                    style={{ ["--gift-big-dur" as string]: (bigGift.coins ?? 0) >= 10000 ? "7s" : "4.5s" }}
+                  >
+                    <div className="gift-big-glow absolute inset-0" />
+                    <div className="gift-big-rays absolute left-1/2 top-1/2" style={{ width: "150cqw", height: "150cqw" }} />
+                    {[8, 22, 36, 50, 64, 78, 90].map((x, i) => (
+                      <span
+                        key={x}
+                        className="gift-big-spark absolute rounded-full bg-amber-200"
+                        style={{ left: `${x}%`, top: `${58 + ((i * 11) % 22)}%`, width: "1.6cqw", height: "1.6cqw", animationDelay: `${i * 0.28}s`, boxShadow: "0 0 1.5cqw #fbbf24" }}
+                      />
+                    ))}
+                    <div className="gift-big-img relative" style={{ width: "42cqw", height: "42cqw" }}>
+                      {bigGift.icon ? (
+                        <img src={bigGift.icon} alt="" referrerPolicy="no-referrer" className="h-full w-full object-contain" />
+                      ) : (
+                        <FaGift aria-hidden className="h-full w-full text-amber-300" />
+                      )}
+                    </div>
+                    <div className="gift-big-banner relative mt-[2cqw] flex max-w-[92%] items-center gap-[2cqw] rounded-full border border-amber-300/40 bg-black/65 py-[1cqw] pl-[1cqw] pr-[3cqw] text-white backdrop-blur">
+                      {bigGift.avatar && (
+                        <img src={bigGift.avatar} alt="" referrerPolicy="no-referrer" className="shrink-0 rounded-full object-cover" style={{ width: "8cqw", height: "8cqw" }} />
+                      )}
+                      <span className="min-w-0 leading-tight">
+                        <span className="flex items-center gap-1 font-bold" style={{ fontSize: "clamp(10px, 3.6cqw, 16px)" }}>
+                          <span className="truncate">{bigGift.user ?? "Seseorang"}</span>
+                          <LevelBadge level={bigGift.level} />
+                        </span>
+                        <span className="block truncate text-amber-200" style={{ fontSize: "clamp(9px, 3cqw, 13px)" }}>
+                          mengirim {bigGift.gift}
+                        </span>
+                      </span>
+                      <span className="font-extrabold text-amber-300" style={{ fontSize: "clamp(14px, 6cqw, 26px)" }}>
+                        ×{bigGift.count ?? 1}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <div className={`absolute left-2 flex max-w-[calc(100%-1rem)] flex-col items-start gap-1.5 ${audioUI ? "bottom-3" : "bottom-14"}`}>
+                  {giftPopups.map((g) => (
+                    <div key={g.key ?? g.id} className="flex max-w-full items-center gap-1.5 rounded-full bg-black/50 py-0.5 pl-0.5 pr-2 text-white shadow backdrop-blur-sm">
+                      {g.avatar ? (
+                        <img src={g.avatar} alt="" referrerPolicy="no-referrer" className="shrink-0 rounded-full object-cover" style={{ width: GIFT_SIZE, height: GIFT_SIZE }} />
+                      ) : (
+                        <span className="flex shrink-0 items-center justify-center rounded-full bg-white/15" style={{ width: GIFT_SIZE, height: GIFT_SIZE }}>
+                          <FaGift aria-hidden className="h-1/2 w-1/2 text-amber-300" />
                         </span>
                       )}
-                    </span>
-                    <span className="block max-w-[10rem] truncate text-[11px] leading-tight text-amber-200">{g.gift}</span>
-                  </span>
-                  {g.icon && <img src={g.icon} alt="" referrerPolicy="no-referrer" className="h-8 w-8 object-contain" />}
-                  <span className="text-base font-bold text-amber-300">×{g.count ?? 1}</span>
+                      <span className="min-w-0 leading-tight">
+                        <span className="flex items-center gap-1 font-semibold" style={{ fontSize: "clamp(9px, 3.4cqw, 12px)" }}>
+                          <span className="truncate">{g.user ?? "Seseorang"}</span>
+                          {!!g.level && g.level > 0 && (
+                            <span
+                              title={`Level gifter ${g.level}`}
+                              className={`shrink-0 rounded px-0.5 font-bold leading-snug ${g.level >= 40 ? "bg-rose-500" : g.level >= 20 ? "bg-violet-500" : "bg-sky-600"}`}
+                              style={{ fontSize: "clamp(7px, 2.6cqw, 9px)" }}
+                            >
+                              Lv {g.level}
+                            </span>
+                          )}
+                        </span>
+                        <span className="block truncate text-amber-200" style={{ fontSize: "clamp(8px, 3cqw, 10px)" }}>
+                          {g.gift}
+                        </span>
+                      </span>
+                      <GiftThumb src={g.icon} size={GIFT_SIZE} />
+                      <span className="font-bold text-amber-300" style={{ fontSize: "clamp(10px, 4cqw, 14px)" }}>
+                        ×{g.count ?? 1}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+            </div>
+          )}
+          {ended && (
+            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/80 px-6 text-center backdrop-blur-md">
+              <div className="relative">
+                {thumbnail ? (
+                  <img src={thumbnail} alt="" className="h-20 w-20 rounded-full object-cover opacity-60 grayscale" />
+                ) : (
+                  <span className="flex h-20 w-20 items-center justify-center rounded-full bg-white/10" />
+                )}
+                <span className="absolute -bottom-1 -right-1 flex h-9 w-9 items-center justify-center rounded-full border-2 border-black bg-rose-600">
+                  <FaVideoSlash aria-hidden className="h-4 w-4 text-white" />
+                </span>
+              </div>
+              <p className="text-lg font-bold text-white">Live telah berakhir</p>
+              <p className="max-w-xs text-sm text-white/65">
+                {username ? `@${username} sudah mengakhiri live.` : "Streamer sudah mengakhiri live."} Koneksi diputus otomatis.
+              </p>
             </div>
           )}
           {needsTap && (

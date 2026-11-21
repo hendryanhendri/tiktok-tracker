@@ -1,6 +1,6 @@
 "use client";
 import { motion } from "framer-motion";
-import { FaEye, FaChartLine, FaGift, FaComment } from "react-icons/fa6";
+import { FaEye, FaChartLine, FaGift, FaComment, FaStop } from "react-icons/fa6";
 
 const fmt = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : n.toLocaleString("id-ID");
@@ -31,9 +31,12 @@ type Props = {
   totalViews: number;
   gifts: number;
   comments: number;
+  title?: string | null;
+  onClose?: () => void;
 };
 
-export default function LiveStats({ username, status, viewerCount, totalViews, gifts, comments }: Props) {
+/** Bilah ringkas satu baris (nama, status, judul, statistik, tombol Tutup) agar video dan chat muat dalam satu layar. */
+export default function LiveStats({ username, status, viewerCount, totalViews, gifts, comments, title, onClose }: Props) {
   const items = [
     { label: "Viewers", value: fmt(viewerCount), icon: FaEye, color: "text-accent" },
     { label: "Total Views", value: fmt(totalViews), icon: FaChartLine, color: "text-accent-2" },
@@ -48,20 +51,34 @@ export default function LiveStats({ username, status, viewerCount, totalViews, g
       animate={{ opacity: 1, y: 0 }}
       className="w-full"
     >
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold">@{username || "—"}</h2>
-        <StatusPill status={status} />
-      </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {items.map(({ label, value, icon: Icon, color }) => (
-          <div key={label} className="rounded-2xl border border-line bg-surface p-4 backdrop-blur-md">
-            <div className="flex items-center gap-2 text-xs text-muted">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-line bg-surface px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-3">
+          <h2 className="truncate text-lg font-semibold">@{username || "—"}</h2>
+          <StatusPill status={status} />
+        </div>
+        {title && (
+          <p className="hidden min-w-0 flex-1 truncate text-sm text-muted xl:block" title={title}>
+            {title}
+          </p>
+        )}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {items.map(({ label, value, icon: Icon, color }) => (
+            <div key={label} title={label} className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-1.5">
               <Icon aria-hidden className={`h-3.5 w-3.5 ${color}`} />
-              {label}
+              <span className="hidden text-xs text-muted sm:inline">{label}</span>
+              <span className="font-semibold tabular-nums">{value}</span>
             </div>
-            <p className="mt-2 text-2xl font-semibold tabular-nums">{value}</p>
-          </div>
-        ))}
+          ))}
+        </div>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold transition hover:bg-rose-500"
+          >
+            <FaStop aria-hidden className="h-3 w-3" /> Tutup
+          </button>
+        )}
       </div>
     </motion.section>
   );

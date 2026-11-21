@@ -77,6 +77,18 @@ export function useTikTokTracker() {
     setCommentTotal(0);
   };
 
+  // Putuskan koneksi tetapi biarkan komentar/gift/statistik tetap terlihat (dipakai saat live berakhir).
+  const stop = (finalStatus = "ended") => {
+    const ws = socketRef.current;
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+      socketRef.current = null;
+    }
+    setConnectionStatus(finalStatus);
+  };
+
   const clearComments = () => setComments([]);
 
   useEffect(() => {
@@ -98,6 +110,7 @@ export function useTikTokTracker() {
     commentTotal,
     connect,
     disconnect,
+    stop,
     clearComments,
   };
 }

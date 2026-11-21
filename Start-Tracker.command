@@ -33,14 +33,19 @@ else
 fi
 
 # 2. Install dependency (hanya pertama kali)
-if [ ! -d node_modules/next ]; then
+if [ ! -d node_modules/next ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
   echo "[..] Memasang dependency (pertama kali, beberapa menit)..."
   npm install --no-audit --no-fund || fail "npm install gagal."
 fi
 
-# 3. Build (hanya pertama kali / setelah update)
-if [ ! -f .next/BUILD_ID ]; then
-  echo "[..] Membangun aplikasi (pertama kali, beberapa menit)..."
+# 3. Build (pertama kali, atau otomatis bila ada file kode lebih baru dari build terakhir)
+NEED_BUILD=0
+[ ! -f .next/BUILD_ID ] && NEED_BUILD=1
+if [ "$NEED_BUILD" = 0 ] && [ -n "$(find app server utils public package.json next.config.ts -type f -newer .next/BUILD_ID 2>/dev/null | head -n 1)" ]; then
+  NEED_BUILD=1
+fi
+if [ "$NEED_BUILD" = 1 ]; then
+  echo "[..] Membangun aplikasi (pertama kali atau setelah update, beberapa menit)..."
   npm run build || fail "Build gagal."
 fi
 
