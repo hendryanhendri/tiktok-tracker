@@ -157,7 +157,18 @@ export default function LivePlayer({
   /** Dikabari saat bentuk tampilan berubah (lebar/mobile), agar halaman menyesuaikan tata letak di sekitarnya. */
   onLayoutChange?: (layout: Layout) => void;
 }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  // Dua elemen video bergantian (double-buffer): kualitas baru dimuat di elemen yang tersembunyi sementara yang lama terus tampil,
+  // lalu ditukar begitu video baru benar-benar jalan. videoRef selalu menunjuk elemen yang AKTIF (dipakai semua kontrol).
+  const vidA = useRef<HTMLVideoElement>(null);
+  const vidB = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const slotRef = useRef(0);
+  const [slot, setSlot] = useState(0);
+  const activeDestroyRef = useRef<(() => void) | null>(null); // pembongkar pemutar yang sedang aktif
+  const [switchSlow, setSwitchSlow] = useState(false); // pergantian kualitas yang lama: tampilkan indikator kecil
+  useEffect(() => {
+    if (!videoRef.current) videoRef.current = vidA.current; // sebelum pemutar pertama dibuat, kontrol sudah punya elemen
+  }, []);
   const stageRef = useRef<HTMLDivElement>(null);
 
   // Daftar masuk urut rendah -> tinggi.
@@ -167,11 +178,8 @@ export default function LivePlayer({
   // Seperti menu TikTok: Auto, Original, lalu tingkat di bawahnya (720p, 540p, 360p). Urut tertinggi -> terendah.
   const qOptions = [...videoQ].reverse();
   const qNames = new Map(qOptions.map((q, i) => [q.id, i === 0 ? "Original" : friendlyQuality(q)]));
-  // Auto dimulai dari tingkat 720p (seperti TikTok); bila ada tersendat berulang, turun satu tingkat.
-  const autoStart = (() => {
-    const i = qOptions.findIndex((q) => parseInt(friendlyQuality(q), 10) === 720);
-    return i >= 0 ? i : qOptions.length > 1 ? 1 : 0;
-  })();
+  // Auto dimulai dari tingkat tertinggi (Original), sama seperti pemutar web TikTok; bila tersendat berulang, turun satu tingkat.
+  const autoStart = 0;
 
   const [mode, setMode] = useState<Mode>(initialMode);
   const [videoId, setVideoId] = useState(videoQ.at(-1)?.id ?? qualities.at(-1)?.id ?? "");
@@ -179,6 +187,10 @@ export default function LivePlayer({
   const [autoIdx, setAutoIdx] = useState(autoStart);
   const autoBaseRef = useRef({ n: 0, t: 0 });
   const [useProxy, setUseProxy] = useState(false);
+  const [restartKey, setRestartKey] = useState(0); // dinaikkan oleh penjaga macet untuk memulai ulang pemutar
+  useEffect(() => {
+    void import("mpegts.js"); // unduh modul pemutar FLV di muka agar awal putar tidak menunggu
+  }, []);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<"main" | "quality">("main");
   const menuRef = useRef<HTMLDivElement>(null);
@@ -219,8 +231,6 @@ export default function LivePlayer({
       /* abaikan */
     }
   };
-  // Bingkai terakhir video, ditahan di bawah indikator memuat saat kualitas diganti (tanpa kilat hitam).
-  const [freeze, setFreeze] = useState<string | null>(null);
   // HLS dengan beberapa tingkat di satu daftar (master playlist): pilihan kualitas diambil dari daftar itu (mis. Shopee).
   const hlsRef = useRef<Hls | null>(null);
   const [hlsLevels, setHlsLevels] = useState<{ i: number; h: number; kbps: number }[]>([]);
@@ -332,6 +342,7 @@ export default function LivePlayer({
   const [variant, setVariant] = useState(0); // indeks URL cadangan untuk kualitas terpilih
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [slowLoad, setSlowLoad] = useState(false); // pergantian kualitas yang lama: baru tampilkan indikator
   const [layoutUser, setLayoutUser] = useState<Layout | null>(null); // pilihan orientasi pengguna (null = otomatis)
   const [isFs, setIsFs] = useState(false);
   const [canPip, setCanPip] = useState(false);
@@ -356,23 +367,47 @@ export default function LivePlayer({
     mode === "audio"
       ? (audioQ ?? lowestVideo ?? qualities[0])
       : ((isAuto ? qOptions[Math.min(autoIdx, qOptions.length - 1)] : videoQ.find((q) => q.id === videoId)) ?? videoQ.at(-1) ?? qualities[0]);
-  const candidates = selected ? [selected.url, ...(selected.alts ?? [])] : [];
+  // FLV yang berisi HEVC/format tak terbaca oleh pemutar: setelah sekali gagal, utamakan HLS untuk live ini (termasuk saat ganti kualitas).
+  const [flvBadIds, setFlvBadIds] = useState<string[]>([]);
+  const selId = selected?.id;
+  const flvBad = !!selId && flvBadIds.includes(selId);
+  // Kualitas sebelum pergantian: bila kualitas baru gagal total, kembali ke sini (video tidak dibiarkan mati).
+  const prevQRef = useRef<{ id: string; auto: boolean } | null>(null);
+  const [qNotice, setQNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!qNotice) return;
+    const t = setTimeout(() => setQNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [qNotice]);
+  const rawCandidates = selected ? [selected.url, ...(selected.alts ?? [])] : [];
+  const hasHls = rawCandidates.some((u) => !isFlv(u));
+  const candidates = flvBad ? [...rawCandidates.filter((u) => !isFlv(u)), ...rawCandidates.filter(isFlv)] : rawCandidates;
   const baseUrl = candidates[variant] ?? selected?.url ?? "";
   const src = baseUrl ? (useProxy ? `${API_URL}/proxy?u=${encodeURIComponent(baseUrl)}` : baseUrl) : "";
+  const autoRef = useRef({ isAuto, idx: autoIdx, max: qOptions.length - 1 });
+  autoRef.current = { isAuto, idx: autoIdx, max: qOptions.length - 1 };
   const audioModeRef = useRef(false);
   audioModeRef.current = mode === "audio";
 
   useEffect(() => {
-    const video = videoRef.current;
+    // Sudah ada pemutar aktif -> ganti kualitas "mulus": bangun yang baru di elemen satunya, yang lama tetap tampil sampai yang baru siap.
+    const seamless = activeDestroyRef.current !== null;
+    const targetSlot = seamless ? 1 - slotRef.current : slotRef.current;
+    const video = (targetSlot === 0 ? vidA : vidB).current;
     if (!src || !video || ended) return;
-    setLoading(true);
+    if (!seamless) {
+      videoRef.current = video;
+      setLoading(true);
+      setNeedsTap(false);
+      setAutoMuted(false);
+      hlsRef.current = null;
+      setHlsLevels([]);
+      setLevelSel(-1);
+    } else {
+      video.muted = true; // senyap sampai ditukar, agar tidak ada suara ganda
+    }
     setFailed(false);
     setFailReason(null);
-    setNeedsTap(false);
-    setAutoMuted(false);
-    hlsRef.current = null;
-    setHlsLevels([]);
-    setLevelSel(-1);
     // dims sengaja TIDAK di-reset: ukuran gambar lama dipertahankan sampai yang baru diketahui, agar bentuk kartu/layout tidak melompat saat kualitas diganti.
     mediaInfoRef.current = {};
     statsRef.current = { waiting: 0, stalled: 0, errors: [] };
@@ -383,7 +418,30 @@ export default function LivePlayer({
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const failAll = (reason: string) => {
-      setFreeze(null);
+      const prev = prevQRef.current;
+      if (prev && !cancelled) {
+        // Kualitas yang baru dipilih tidak bisa diputar di browser ini: kembali ke yang tadi (bingkai terakhir tetap ditahan).
+        prevQRef.current = null;
+        log(`kualitas baru gagal (${reason.slice(0, 60)}) -> kembali ke ${prev.auto ? "Auto" : prev.id}`);
+        setQNotice("Kualitas itu tidak bisa diputar di browser ini. Dikembalikan ke kualitas sebelumnya.");
+        setIsAuto(prev.auto);
+        setVideoId(prev.id);
+        setVariant(0);
+        setUseProxy(false);
+        return;
+      }
+      const au = autoRef.current;
+      if (au.isAuto && au.idx < au.max && !cancelled && !audioModeRef.current) {
+        // Mode Auto: tingkat ini tidak bisa diputar (mis. HEVC) -> turun satu tingkat, bukan menampilkan kesalahan.
+        log(`Auto: tingkat ini gagal (${reason.slice(0, 60)}), turun satu tingkat`);
+        setAutoIdx(au.idx + 1);
+        setVariant(0);
+        setUseProxy(false);
+        return;
+      }
+      activeDestroyRef.current?.(); // gagal total: jangan biarkan video lama tampil di bawah layar kesalahan
+      activeDestroyRef.current = null;
+      setSwitchSlow(false);
       setFailReason(reason || null);
       setFailed(true);
     };
@@ -405,10 +463,31 @@ export default function LivePlayer({
       if (!useProxy) return setUseProxy(true);
       nextVariant(reason);
     };
-    const onReady = () => {
+    let swapped = false;
+    const slowTimer: ReturnType<typeof setTimeout> | null = seamless ? setTimeout(() => !cancelled && setSwitchSlow(true), 2500) : null;
+    const onReady = (ev?: Event) => {
+      // Pada pergantian mulus, tukar hanya saat benar-benar "playing" (gambar sudah berjalan), bukan saat baru "loadeddata".
+      if (seamless && !swapped && ev?.type !== "playing") return;
+      // Jangan menukar ke elemen yang hanya bersuara (tanpa gambar) selagi video lama masih punya gambar; varian lain dicoba oleh pemeriksa "tanpa gambar".
+      if (seamless && !swapped && video.videoWidth === 0 && !audioModeRef.current && !giveUpVideoRef.current) return;
+      if (!swapped && !cancelled) {
+        swapped = true;
+        const old = videoRef.current;
+        if (seamless && old && old !== video) {
+          video.muted = old.muted; // warisi suara/volume dari video lama
+          video.volume = old.volume;
+        }
+        activeDestroyRef.current?.(); // bongkar pemutar lama (setelah yang baru siap)
+        activeDestroyRef.current = () => destroy?.();
+        videoRef.current = video;
+        slotRef.current = targetSlot;
+        setSlot(targetSlot);
+      }
+      if (slowTimer) clearTimeout(slowTimer);
+      setSwitchSlow(false);
+      prevQRef.current = null; // kualitas yang dipilih berhasil diputar
       if (timer) clearTimeout(timer);
       setLoading(false);
-      setFreeze(null);
     };
     ["playing", "loadeddata", "canplay"].forEach((ev) => video.addEventListener(ev, onReady));
     // Suara jalan tapi gambar tidak ada (mis. codec HEVC tak didukung) -> coba varian lain.
@@ -462,27 +541,27 @@ export default function LivePlayer({
 
     const start = async () => {
       // Cek cepat status sumber: 404/403/410 = live berakhir atau URL kedaluwarsa.
-      const ctrl = new AbortController();
-      if (!isFlv(src))
-        try {
-          const res = await fetch(src, {
-            signal: ctrl.signal,
-            cache: "no-store",
+      // Jalan paralel dengan pemuatan video (tidak menahan awal putar). Hanya untuk mendeteksi live berakhir / URL kedaluwarsa.
+      if (!isFlv(src)) {
+        const ctrl = new AbortController();
+        fetch(src, { signal: ctrl.signal, cache: "no-store" })
+          .then((res) => {
+            ctrl.abort();
+            if (cancelled) return;
+            log(`preflight HTTP ${res.status}`);
+            if ([403, 404, 410].includes(res.status)) {
+              fail(
+                `TikTok membalas HTTP ${res.status}. Live kemungkinan sudah berakhir atau URL kedaluwarsa. Buka live-nya lagi lalu klik bookmarklet.`,
+                true,
+              );
+            }
+          })
+          .catch((e) => {
+            if (cancelled) return;
+            log(`preflight gagal: ${String((e as Error)?.message ?? e).slice(0, 80)}`);
+            if (!useProxy) fail(""); // CORS/jaringan -> proxy
           });
-          ctrl.abort();
-          if (cancelled) return;
-          log(`preflight HTTP ${res.status}`);
-          if ([403, 404, 410].includes(res.status)) {
-            return fail(
-              `TikTok membalas HTTP ${res.status}. Live kemungkinan sudah berakhir atau URL kedaluwarsa. Buka live-nya lagi lalu klik bookmarklet.`,
-              true,
-            );
-          }
-        } catch (e) {
-          if (cancelled) return;
-          log(`preflight gagal: ${String((e as Error)?.message ?? e).slice(0, 80)}`);
-          if (!useProxy) return fail(""); // CORS/jaringan -> proxy
-        }
+      }
 
       timer = setTimeout(() => fail("Tidak ada data video setelah 12 detik. Coba kualitas lain atau ambil ulang URL.", useProxy), 12000);
 
@@ -491,16 +570,22 @@ export default function LivePlayer({
         try {
           const { default: mpegts } = await import("mpegts.js");
           if (cancelled) return;
+          // Kegagalan FLV (mis. HEVC) sudah ditangani lewat event ERROR + pindah ke HLS; jangan biarkan pustaka menulis console.error
+          // (di mode dev, Next.js menampilkannya sebagai layar "Console Error" seolah aplikasi rusak).
+          mpegts.LoggingControl.applyConfig({ enableError: false, enableWarn: false, enableInfo: false, enableDebug: false, enableVerbose: false });
           if (!mpegts.getFeatureList().mseLivePlayback) return fail("Browser tidak mendukung pemutaran FLV live.", true);
           const player = mpegts.createPlayer(
             { type: "flv", isLive: true, url: src },
             {
+              // Mode normal: stash buffer aktif (dasar kelancaran, seperti membuka link langsung di browser).
+              // Hanya mode latensi rendah yang mengejar tepi live.
               enableStashBuffer: !lowLatency,
               autoCleanupSourceBuffer: true,
-              // Mengejar tepi live: bila jeda melebihi batas, percepat/loncat mendekati live.
+              autoCleanupMaxBackwardDuration: 30,
+              autoCleanupMinBackwardDuration: 15,
               liveBufferLatencyChasing: lowLatency,
-              liveBufferLatencyMaxLatency: 2,
-              liveBufferLatencyMinRemain: 0.5,
+              liveBufferLatencyMaxLatency: 3,
+              liveBufferLatencyMinRemain: 1,
             },
           );
           player.attachMediaElement(video);
@@ -525,9 +610,15 @@ export default function LivePlayer({
               }, 1000 * reconnects);
               return;
             }
-            // Codec tidak didukung bukan masalah jaringan: lewati proxy, langsung coba varian lain.
-            if (/CodecUnsupported|Unsupported codec/i.test(`${detail} ${JSON.stringify(info ?? {})}`)) {
-              log("codec tidak didukung -> varian berikutnya");
+            // Codec/format tidak didukung (mis. FLV berisi HEVC) bukan masalah jaringan: lewati proxy.
+            if (/CodecUnsupported|Unsupported codec|FormatError|HEVC|Invalid .*Record/i.test(`${detail} ${JSON.stringify(info ?? {})}`)) {
+              log("FLV tak terbaca (codec/format) -> utamakan HLS");
+              if (!flvBad && hasHls) {
+                setFlvBadIds((a) => (selId ? [...a, selId] : a));
+                setVariant(0);
+                setUseProxy(false);
+                return;
+              }
               return nextVariant(`Codec video tidak didukung browser ini (${detail}).`);
             }
             fail(reason);
@@ -555,21 +646,26 @@ export default function LivePlayer({
           fail("Gagal memuat pemutar FLV.", true);
         }
       } else if (Hls.isSupported()) {
-        const hls = new Hls(
-          lowLatency
-            ? {
-                lowLatencyMode: true,
-                liveSyncDurationCount: 2,
-                liveMaxLatencyDurationCount: 4,
-                maxBufferLength: 8,
-                backBufferLength: 10,
-              }
-            : {
-                lowLatencyMode: false,
-                liveSyncDurationCount: 4,
-                maxBufferLength: 30,
-              },
-        );
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: lowLatency,
+          liveSyncDurationCount: lowLatency ? 2 : 4,
+          liveMaxLatencyDurationCount: lowLatency ? 5 : 12,
+          maxLiveSyncPlaybackRate: lowLatency ? 1.1 : 1, // kejar tepi live dengan percepatan halus, bukan loncat
+          maxBufferLength: lowLatency ? 8 : 30,
+          maxMaxBufferLength: 40,
+          backBufferLength: 15,
+          maxBufferHole: 0.5, // lompati celah kecil di buffer alih-alih berhenti
+          nudgeMaxRetry: 10,
+          startFragPrefetch: true,
+          // Jaringan sesaat bermasalah: coba lagi lebih sabar sebelum dianggap putus.
+          manifestLoadingMaxRetry: 6,
+          levelLoadingMaxRetry: 6,
+          fragLoadingMaxRetry: 6,
+          fragLoadingRetryDelay: 500,
+          manifestLoadingTimeOut: 8000,
+          fragLoadingTimeOut: 12000,
+        });
         let hlsRetries = 0;
         video.addEventListener("playing", () => (hlsRetries = 0));
         hlsRef.current = hls;
@@ -638,13 +734,35 @@ export default function LivePlayer({
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onStalled);
       if (noVideoTimer) clearTimeout(noVideoTimer);
-      destroy?.();
+      if (slowTimer) clearTimeout(slowTimer);
+      setSwitchSlow(false);
+      // Pemutar yang sudah menjadi aktif dibiarkan hidup sampai penggantinya siap (dibongkar oleh onReady berikutnya / ended / unmount).
+      if (!swapped) destroy?.();
     };
-  }, [src, useProxy, variant, candidates.length, log, lowLatency, ended]);
+  }, [src, useProxy, variant, candidates.length, log, lowLatency, ended, restartKey, flvBad, hasHls, selId]);
+  // Ganti kualitas: bingkai terakhir ditahan tanpa indikator apa pun (terasa seperti sekedip). Indikator memuat hanya muncul bila lama (> 2.5 dtk).
+  useEffect(() => {
+    if (!loading) {
+      setSlowLoad(false);
+      return;
+    }
+    setSlowLoad(true);
+  }, [loading]);
   // Live berakhir: hentikan suara/gambar (pemutar sudah dibongkar oleh efek di atas).
   useEffect(() => {
-    if (ended) videoRef.current?.pause();
+    if (ended) {
+      activeDestroyRef.current?.();
+      activeDestroyRef.current = null;
+      videoRef.current?.pause();
+    }
   }, [ended]);
+  useEffect(
+    () => () => {
+      activeDestroyRef.current?.();
+      activeDestroyRef.current = null;
+    },
+    [],
+  );
 
   const copyDiagnosis = async () => {
     const v = videoRef.current;
@@ -886,7 +1004,7 @@ export default function LivePlayer({
     events.forEach((ev) => v.addEventListener(ev, sync));
     sync();
     return () => events.forEach((ev) => v.removeEventListener(ev, sync));
-  }, [failed]);
+  }, [failed, slot]);
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
@@ -908,7 +1026,7 @@ export default function LivePlayer({
     if (x > 0) setAutoMuted(false);
   };
 
-  // Auto: bila tersendat >= 3 kali dalam 30 detik, turun satu tingkat kualitas (tidak naik lagi agar tidak bolak-balik).
+  // Auto: bila tersendat >= 6 kali dalam 30 detik (dan sudah memutar > 15 dtk, agar "waiting" saat awal putar tidak dihitung), turun satu tingkat kualitas.
   useEffect(() => {
     if (!isAuto || mode === "audio") return;
     const t = setInterval(() => {
@@ -919,28 +1037,76 @@ export default function LivePlayer({
         return;
       }
       if (Date.now() - base.t > 30000) autoBaseRef.current = { n, t: Date.now() };
-      else if (n - base.n >= 3 && autoIdx < qOptions.length - 1) {
+      else if (n - base.n >= 6 && autoIdx < qOptions.length - 1 && (videoRef.current?.currentTime ?? 0) > 15) {
         log(`Auto: tersendat ${n - base.n}x, turun ke kualitas lebih rendah`);
         autoBaseRef.current = { n, t: Date.now() };
-        captureFrame();
         setAutoIdx(autoIdx + 1);
       }
     }, 5000);
     return () => clearInterval(t);
   }, [isAuto, mode, autoIdx, qOptions.length, log]);
 
-  // Ukur jeda buffer tiap detik.
+  // Ukur jeda buffer tiap detik, sekaligus mengejar tepi live otomatis (berlaku untuk FLV maupun HLS):
+  // jeda sedang -> putar sedikit lebih cepat; jeda besar -> loncat sekali ke dekat tepi (sisakan bantalan agar tidak loading).
   useEffect(() => {
+    let boosted = false;
+    let lastT = -1;
+    let stuck = 0;
+    const el = videoRef.current;
     const t = setInterval(() => {
       const v = videoRef.current;
-      if (!v || v.paused || !v.buffered.length) return setLag(null);
-      setLag(Math.max(0, v.buffered.end(v.buffered.length - 1) - v.currentTime));
+      if (!v || v.paused || !v.buffered.length) {
+        stuck = 0;
+        if (v && boosted) {
+          v.playbackRate = 1;
+          boosted = false;
+        }
+        return setLag(null);
+      }
+      const end = v.buffered.end(v.buffered.length - 1);
+      const l = Math.max(0, end - v.currentTime);
+      setLag(l);
+      if (v.seeking) return;
+      // Penjaga macet: gambar tidak maju padahal tidak dijeda (data tetap masuk, jeda membengkak). Dorong ke dalam buffer; bila tetap macet, mulai ulang pemutar.
+      if (Math.abs(v.currentTime - lastT) < 0.05) stuck++;
+      else stuck = 0;
+      lastT = v.currentTime;
+      if (stuck === 3 && l > 0.6) {
+        v.currentTime = Math.max(v.currentTime + 0.1, end - Math.min(1.5, l / 2));
+        void v.play().catch(() => {});
+      } else if (stuck >= 8) {
+        stuck = 0;
+        setRestartKey((k) => k + 1);
+        return;
+      }
+      if (!lowLatency) {
+        // Mode normal: jangan ganggu putaran; loncat hanya bila sudah sangat tertinggal (tidak lagi percepatan).
+        if (l > 25) v.currentTime = end - 8;
+        return;
+      }
+      if (l > 5) {
+        v.currentTime = end - 2;
+      } else if (l > 3 && !boosted) {
+        v.playbackRate = 1.08;
+        boosted = true;
+      } else if (l < 1.5 && boosted) {
+        v.playbackRate = 1;
+        boosted = false;
+      }
     }, 1000);
-    return () => clearInterval(t);
-  }, []);
+    return () => {
+      clearInterval(t);
+      if (el && boosted) el.playbackRate = 1;
+    };
+  }, [lowLatency]);
   const goLive = () => {
     const v = videoRef.current;
-    if (v && v.buffered.length) v.currentTime = Math.max(0, v.buffered.end(v.buffered.length - 1) - 0.3);
+    if (!v || !v.buffered.length) return;
+    const end = v.buffered.end(v.buffered.length - 1);
+    // Sisakan bantalan ~1.5 dtk di depan posisi putar; kalau mepet ke ujung buffer, video pasti berhenti menunggu data (loading).
+    const hlsPos = hlsRef.current?.liveSyncPosition;
+    const target = typeof hlsPos === "number" && hlsPos <= end - 1 ? hlsPos : end - 1.5;
+    if (target > v.currentTime + 0.5) v.currentTime = target;
   };
   const toggleLowLatency = () => {
     const next = !lowLatency;
@@ -974,19 +1140,6 @@ export default function LivePlayer({
     setVariant(0);
     setUseProxy(false);
   };
-  const captureFrame = () => {
-    const v = videoRef.current;
-    if (!v || !v.videoWidth || v.paused) return setFreeze(null);
-    try {
-      const c = document.createElement("canvas");
-      c.width = Math.min(v.videoWidth, 720);
-      c.height = Math.round((c.width * v.videoHeight) / v.videoWidth);
-      c.getContext("2d")?.drawImage(v, 0, 0, c.width, c.height);
-      setFreeze(c.toDataURL("image/jpeg", 0.6));
-    } catch {
-      setFreeze(null); // canvas "tercemar" (sumber lintas-asal): tanpa bingkai beku
-    }
-  };
   const pickLevel = (i: number) => {
     const h = hlsRef.current;
     if (!h) return;
@@ -998,7 +1151,6 @@ export default function LivePlayer({
     setMenuOpen(false);
   };
   const chooseAuto = () => {
-    captureFrame();
     giveUpVideoRef.current = false;
     setNoVideo(false);
     setIsAuto(true);
@@ -1007,7 +1159,9 @@ export default function LivePlayer({
     setUseProxy(false);
   };
   const changeQuality = (id: string) => {
-    if (id !== selected?.id || isAuto) captureFrame(); // hanya bila benar-benar berganti sumber
+    if (id !== selected?.id || isAuto) {
+      if (selected && !failed) prevQRef.current = { id: selected.id, auto: isAuto };
+    }
     giveUpVideoRef.current = false;
     setNoVideo(false);
     setIsAuto(false);
@@ -1211,13 +1365,22 @@ export default function LivePlayer({
           className={`group relative bg-black ${isFs ? "h-screen w-screen" : effLayout === "mobile" ? "mx-auto" : "aspect-video"}`}
         >
           {/* Elemen video tetap ada di mode audio agar suara terus diputar */}
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            onClick={audioUI ? undefined : togglePlay}
-            className={audioUI ? "sr-only" : "h-full w-full cursor-pointer bg-black object-contain"}
-          />
+          {[vidA, vidB].map((r, i) => (
+            <video
+              key={i}
+              ref={r}
+              autoPlay
+              playsInline
+              onClick={audioUI || slot !== i ? undefined : togglePlay}
+              className={
+                audioUI
+                  ? "sr-only"
+                  : slot === i
+                    ? "relative z-0 h-full w-full cursor-pointer bg-black object-contain"
+                    : "pointer-events-none absolute inset-0 h-full w-full bg-black object-contain opacity-0"
+              }
+            />
+          ))}
           {/* Kontrol bawah (menggantikan kontrol bawaan browser, tanpa menu titik tiga) */}
           {!audioUI && !needsTap && (
             <div
@@ -1728,13 +1891,20 @@ export default function LivePlayer({
               🔇 Suara mati · klik untuk menyalakan
             </button>
           )}
-          {freeze && loading && !audioUI && (
-            <img alt="bingkai terakhir" src={freeze} className="pointer-events-none absolute inset-0 z-[1] h-full w-full bg-black object-contain" />
+          {switchSlow && !loading && !audioUI && (
+            <div className="pointer-events-none absolute right-3 top-3 z-[3] flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs font-medium text-white backdrop-blur">
+              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              Mengganti kualitas…
+            </div>
           )}
-          {loading && !audioUI && !needsTap && (
-            <div className={`pointer-events-none absolute inset-0 z-[2] flex flex-col items-center justify-center gap-2 ${freeze ? "bg-black/30" : ""}`}>
+          {qNotice && (
+            <div className="pointer-events-none absolute left-1/2 top-3 z-[3] max-w-[90%] -translate-x-1/2 rounded-full bg-black/70 px-3 py-1.5 text-center text-xs font-medium text-white backdrop-blur">
+              {qNotice}
+            </div>
+          )}
+          {loading && slowLoad && !audioUI && !needsTap && (
+            <div className="pointer-events-none absolute inset-0 z-[2] flex flex-col items-center justify-center gap-2">
               <span className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-              {freeze && <span className="rounded-full bg-black/60 px-3 py-1 text-xs font-medium text-white">Mengganti kualitas…</span>}
             </div>
           )}
         </div>

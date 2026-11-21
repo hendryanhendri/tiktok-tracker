@@ -14,6 +14,8 @@
  * - Hanya mendengarkan 127.0.0.1 (tanpa autentikasi, jangan dibuka ke jaringan).
  */
 import http from "node:http";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { readFileSync, writeFileSync } from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { TikTokLiveConnection, WebcastEvent, ControlEvent, RouteConfig } from "tiktok-live-connector";
@@ -362,7 +364,7 @@ function rewritePlaylist(text: string, base: string) {
     })
     .join("\n");
 }
-async function handleProxy(target: string, res: http.ServerResponse) {
+async function handleProxy(target: string, res: http.ServerResponse, range?: string | string[]) {
   if (!isSafeTarget(target)) return void res.writeHead(400).end("URL tidak valid");
   const label = (() => {
     try {
@@ -374,29 +376,45 @@ async function handleProxy(target: string, res: http.ServerResponse) {
   })();
   // Referer mengikuti sumbernya: sebagian CDN menolak permintaan tanpa Referer situs asal (hotlink protection).
   const referer = /shopee|susercontent|shp\./i.test(new URL(target).hostname) ? "https://live.shopee.co.id/" : "https://www.tiktok.com/";
-  const upstream = await fetch(target, { headers: { "User-Agent": UA, Referer: referer } });
+  // Batalkan permintaan ke TikTok begitu penonton menutup/ganti kualitas (tidak membuang bandwidth), dan jangan menggantung selamanya.
+  const abort = new AbortController();
+  res.on("close", () => abort.abort());
+  res.socket?.setNoDelay(true); // kirim potongan kecil langsung, jangan ditahan (Nagle)
+  const headers: Record<string, string> = { "User-Agent": UA, Referer: referer, Accept: "*/*" };
+  if (typeof range === "string") headers.Range = range; // dukung Range untuk berkas non-live
+  const headTimer = setTimeout(() => abort.abort(), 10000); // batas menunggu respons awal saja, bukan lama streamnya
+  let upstream: Response;
+  try {
+    upstream = await fetch(target, { headers, signal: abort.signal });
+  } catch (e) {
+    clearTimeout(headTimer);
+    if (res.writableEnded || res.destroyed) return;
+    console.log(`[proxy] gagal ${label}: ${String((e as Error)?.message ?? e).slice(0, 80)}`);
+    return void res.writeHead(504).end("Upstream timeout");
+  }
+  clearTimeout(headTimer);
   console.log(`[proxy] ${upstream.status} ${upstream.headers.get("content-type") ?? "-"} ${label}`);
-  if (!upstream.ok || !upstream.body) return void res.writeHead(upstream.status || 502).end("Upstream error");
+  if (!(upstream.status === 200 || upstream.status === 206) || !upstream.body) {
+    return void res.writeHead(upstream.status || 502).end("Upstream error");
+  }
 
   const type = upstream.headers.get("content-type") ?? "";
   if (/mpegurl/i.test(type) || /\.m3u8(\?|$)/i.test(target)) {
     res.writeHead(200, { "Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-store" });
     return void res.end(rewritePlaylist(await upstream.text(), target));
   }
-  res.writeHead(200, { "Content-Type": type || "application/octet-stream", "Cache-Control": "no-store" });
-  const reader = upstream.body.getReader();
-  let bytes = 0;
-  res.on("close", () => {
-    console.log(`[proxy] selesai ${label}: ${(bytes / 1024).toFixed(0)} KB terkirim`);
-    void reader.cancel().catch(() => {});
-  });
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    bytes += value.length;
-    if (!res.write(value)) await new Promise((r) => res.once("drain", r));
+  const out: Record<string, string> = { "Content-Type": type || "application/octet-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no" };
+  for (const h of ["content-length", "content-range", "accept-ranges"]) {
+    const v = upstream.headers.get(h);
+    if (v && upstream.headers.get("content-encoding") == null) out[h] = v;
   }
-  res.end();
+  res.writeHead(upstream.status, out);
+  let bytes = 0;
+  const body = Readable.fromWeb(upstream.body as any);
+  body.on("data", (c: Buffer) => (bytes += c.length));
+  res.on("close", () => console.log(`[proxy] selesai ${label}: ${(bytes / 1024).toFixed(0)} KB terkirim`));
+  // pipeline: backpressure otomatis + bersih-bersih dua arah bila salah satu sisi putus (tanpa unhandled rejection).
+  pipeline(body, res).catch(() => {});
 }
 
 /* ---------- HTTP ---------- */
@@ -426,7 +444,8 @@ http
     if (originAllowed(origin)) res.setHeader("Access-Control-Allow-Origin", origin as string);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Range");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range");
     if (req.method === "OPTIONS") return void res.writeHead(204).end();
 
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
@@ -445,6 +464,21 @@ http
         activeUser = name;
         setGoals([]); // target dari streamer sebelumnya tidak boleh terbawa
         setStatus("connecting");
+        // URL video sudah ada: kirim SEKARANG supaya video langsung mulai. Koneksi komentar/gift (penandatanganan + hingga 3 percobaan,
+        // bisa beberapa detik) disambung di belakang layar; statusnya sampai ke klien lewat WebSocket ("status").
+        if (room.qualities.length) {
+          void startSession(name)
+            .then(() => {
+              if (activeUser === name) setStatus("connected");
+            })
+            .catch((e) => {
+              console.warn(`[chat] @${name}:`, errText(e));
+              if (activeUser === name) setStatus("disconnected");
+            });
+          return send(res, 200, { ...room, hlsUrl: room.qualities.at(-1)?.url ?? null, chat: { ok: true }, videoNote: null });
+        }
+
+        // Tanpa URL video dari API room: harus menunggu koneksi chat (roomInfo-nya dipakai sebagai cadangan sumber video).
         // Video tidak boleh gagal hanya karena komentar/gift (Euler) bermasalah.
         let chat: { ok: boolean; error?: string } = { ok: true };
         try {
@@ -497,7 +531,7 @@ http
         });
       }
 
-      if (req.method === "GET" && route === "proxy") return await handleProxy(url.searchParams.get("u") ?? "", res);
+      if (req.method === "GET" && route === "proxy") return await handleProxy(url.searchParams.get("u") ?? "", res, req.headers.range);
 
       send(res, 404, { error: "Not found" });
     } catch (e: any) {
