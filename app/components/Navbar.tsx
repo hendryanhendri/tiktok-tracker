@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FaPlay, FaTowerBroadcast, FaVideo, FaBook } from "react-icons/fa6";
+import { FaPlay, FaTowerBroadcast, FaVideo, FaBook, FaBagShopping } from "react-icons/fa6";
 
 const links = [
   { name: "Live Player", icon: FaTowerBroadcast, href: "/" },
   { name: "Video Saja", icon: FaVideo, href: "/video" },
+  { name: "Shopee Live", icon: FaBagShopping, href: "/shopee" },
   { name: "Dokumentasi", icon: FaBook, href: "/doc" },
 ];
 
@@ -36,8 +37,9 @@ export default function Navbar() {
                     active ? "bg-white/15 font-medium text-white" : "text-muted hover:bg-white/10 hover:text-white"
                   }`}
                 >
-                  <Icon aria-hidden className="h-3.5 w-3.5" />
-                  {name}
+                  <Icon aria-hidden className="h-3.5 w-3.5 shrink-0" />
+                  {/* Layar kecil: hanya menu aktif yang menampilkan nama, sisanya ikon saja agar tidak berdesakan */}
+                  <span className={`whitespace-nowrap ${active ? "" : "hidden sm:inline"}`}>{name}</span>
                 </Link>
               </li>
             );

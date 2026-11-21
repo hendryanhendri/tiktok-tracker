@@ -7,6 +7,10 @@ Picture-in-Picture, plus komentar, gift, dan viewer. Frontend Next.js + backend 
 Untuk rekaman panjang di Chrome/Edge, pilih **Simpan rekaman → Langsung ke disk** di menu pengaturan (gear); Chrome akan menampilkan dialog simpan dan izin tulis.
 **Target (challenge) gift** yang sedang aktif di live tampil sebagai bar progres di pojok kiri atas video (ikut tombol "Gift di layar").
 
+**Tab Shopee Live:** menonton live Shopee (hanya video dan suara, tanpa login). Shopee menandatangani API-nya di halaman webnya sendiri, jadi alurnya
+sama seperti bookmark TikTok: pasang bookmark **🛍️ Shopee Live** dari tab itu, tempel tautan live lalu **Buka live**, putar live-nya di tab Shopee, lalu klik
+bookmark. Komentar dan gift Shopee belum tersedia. Tab ini tidak berisi fitur interaksi palsu (fake buy, like/view massal).
+
 ## Menjalankan di Windows (satu klik)
 
 Download/clone project, lalu **klik dua kali `Start-Tracker.bat`**. Pertama kali, skrip otomatis

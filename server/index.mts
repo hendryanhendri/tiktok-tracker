@@ -372,7 +372,9 @@ async function handleProxy(target: string, res: http.ServerResponse) {
       return "?";
     }
   })();
-  const upstream = await fetch(target, { headers: { "User-Agent": UA, Referer: "https://www.tiktok.com/" } });
+  // Referer mengikuti sumbernya: sebagian CDN menolak permintaan tanpa Referer situs asal (hotlink protection).
+  const referer = /shopee|susercontent|shp\./i.test(new URL(target).hostname) ? "https://live.shopee.co.id/" : "https://www.tiktok.com/";
+  const upstream = await fetch(target, { headers: { "User-Agent": UA, Referer: referer } });
   console.log(`[proxy] ${upstream.status} ${upstream.headers.get("content-type") ?? "-"} ${label}`);
   if (!upstream.ok || !upstream.body) return void res.writeHead(upstream.status || 502).end("Upstream error");
 
