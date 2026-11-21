@@ -1209,7 +1209,9 @@ export default function LivePlayer({
                 <div
                   role="menu"
                   aria-label="Pengaturan video"
-                  className="w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-white/10 bg-[#262626]/95 p-2 text-[15px] text-white shadow-2xl backdrop-blur-xl"
+                  className={`w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-white/10 bg-[#262626]/95 p-2 text-[15px] text-white shadow-2xl backdrop-blur-xl ${
+                    effLayout === "mobile" && menuView === "quality" ? "hidden" : ""
+                  }`}
                 >
                   <MenuRow
                     icon={FaRotate}
@@ -1321,12 +1323,18 @@ export default function LivePlayer({
                   <div
                     role="radiogroup"
                     aria-label="Kualitas video"
-                    className="absolute inset-0 z-10 flex flex-col rounded-2xl border border-white/10 bg-[#262626] p-2 text-[15px] text-white shadow-2xl sm:inset-auto sm:right-[calc(100%+0.5rem)] sm:top-0 sm:w-60 sm:bg-[#262626]/95 sm:backdrop-blur-xl"
+                    // Kartu sempit (mode Mobile): panel menimpa menu utama, karena kartu memotong apa pun di luar tepinya.
+                    // Kartu lebar: panel muncul di samping kiri menu (di layar kecil tetap menimpa).
+                    className={`z-10 flex flex-col rounded-2xl border border-white/10 bg-[#262626] p-2 text-[15px] text-white shadow-2xl ${
+                      effLayout === "mobile"
+                        ? "relative w-72 max-w-[calc(100vw-2rem)]" // menu utama disembunyikan; panel setinggi isinya
+                        : "absolute inset-0 sm:inset-auto sm:right-[calc(100%+0.5rem)] sm:top-0 sm:w-60 sm:bg-[#262626]/95 sm:backdrop-blur-xl"
+                    }`}
                   >
                     <button
                       type="button"
                       onClick={() => setMenuView("main")}
-                      className="mb-1 flex w-full items-center gap-2 rounded-xl px-4 py-2.5 text-left text-sm text-white/70 transition hover:bg-white/10 sm:hidden"
+                      className={`mb-1 flex w-full items-center gap-2 rounded-xl px-4 py-2.5 text-left text-sm text-white/70 transition hover:bg-white/10 ${effLayout === "mobile" ? "" : "sm:hidden"}`}
                     >
                       <FaChevronLeft aria-hidden className="h-3.5 w-3.5" /> Kualitas
                     </button>

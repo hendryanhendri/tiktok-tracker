@@ -49,9 +49,46 @@ if [ "$NEED_BUILD" = 1 ]; then
   npm run build || fail "Build gagal."
 fi
 
-# 4. Jalankan server + web, lalu buka browser
+# 4. Nama lokal fsn.live.test (opsional): terlihat seperti domain dan tanpa :3000.
+#    Hanya berlaku di komputer ini (diarahkan ke 127.0.0.1), tidak dibuka ke internet.
+APP_DOMAIN="fsn.live.test"
+APP_URL="http://localhost:3000"
+HAVE_NAME=0
+if grep -qE "^[[:space:]]*127\.0\.0\.1[[:space:]]+.*\b$APP_DOMAIN\b" /etc/hosts 2>/dev/null; then
+  HAVE_NAME=1
+elif [ ! -f "$RUNTIME/no-local-domain" ]; then
+  echo
+  echo "Pasang nama lokal $APP_DOMAIN? Alamat jadi http://$APP_DOMAIN (tanpa :3000), hanya terbuka di komputer ini."
+  echo "Perlu password Mac sekali untuk menambah satu baris ke /etc/hosts."
+  read -r -p "Pasang sekarang? [Y/n] " ANS
+  case "$ANS" in
+    [nN]*)
+      mkdir -p "$RUNTIME" && touch "$RUNTIME/no-local-domain"
+      echo "Dilewati. Hapus file .runtime/no-local-domain jika ingin ditanya lagi." ;;
+    *)
+      if echo "127.0.0.1 $APP_DOMAIN" | sudo tee -a /etc/hosts >/dev/null; then
+        sudo dscacheutil -flushcache 2>/dev/null; sudo killall -HUP mDNSResponder 2>/dev/null
+        HAVE_NAME=1
+        echo "[OK] Nama $APP_DOMAIN terpasang."
+      else
+        echo "[!] Tidak bisa mengubah /etc/hosts. Memakai http://localhost:3000."
+      fi ;;
+  esac
+fi
+if [ "$HAVE_NAME" = 1 ]; then
+  # Port 80 supaya alamat tanpa :3000. Bila port 80 sudah dipakai program lain, tetap pakai :3000.
+  if lsof -iTCP:80 -sTCP:LISTEN >/dev/null 2>&1; then
+    APP_URL="http://$APP_DOMAIN:3000"
+  else
+    export PORT=80
+    APP_URL="http://$APP_DOMAIN"
+  fi
+fi
+
+# 5. Jalankan server + web, lalu buka browser
 echo "[..] Menjalankan aplikasi... jangan tutup jendela ini selama dipakai."
-(sleep 6 && open "http://localhost:3000") &
+echo "     Alamat: $APP_URL"
+(sleep 6 && open "$APP_URL") &
 npm start
 
 echo

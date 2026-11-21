@@ -34,13 +34,27 @@ try {
 const HOST = process.env.HOST ?? "127.0.0.1";
 const HTTP_PORT = Number(process.env.API_PORT ?? 8000);
 const WS_PORT = Number(process.env.WS_PORT ?? 8001);
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN ?? "http://localhost:3000";
+// Asal (origin) halaman yang boleh memanggil API ini: localhost, 127.0.0.1, dan nama lokal fsn.live.test (dengan/tanpa port 3000).
+// ALLOWED_ORIGIN (opsional, pisahkan dengan koma) menambah asal lain, mis. "http://nama-lain.test".
+const APP_HOSTS = ["localhost", "127.0.0.1", "fsn.live.test"];
+const EXTRA_ORIGINS = (process.env.ALLOWED_ORIGIN ?? "").split(",").map((o) => o.trim()).filter(Boolean);
+const originAllowed = (origin?: string): boolean => {
+  if (!origin) return false;
+  if (EXTRA_ORIGINS.includes(origin)) return true;
+  try {
+    const u = new URL(origin);
+    return u.protocol === "http:" && APP_HOSTS.includes(u.hostname) && (u.port === "" || u.port === "3000");
+  } catch {
+    return false;
+  }
+};
 const SIGN_API_KEY = process.env.TIKTOK_SIGN_API_KEY || undefined;
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
 /* ---------- WebSocket ke browser ---------- */
-const wss = new WebSocketServer({ port: WS_PORT, host: HOST });
+// Halaman web dari situs lain tidak boleh menyambung ke WebSocket ini; klien tanpa Origin (bukan browser) tetap boleh.
+const wss = new WebSocketServer({ port: WS_PORT, host: HOST, verifyClient: ({ origin }) => !origin || originAllowed(origin) });
 let currentStatus = "offline";
 const broadcast = (payload: unknown) => {
   const msg = JSON.stringify(payload);
@@ -333,7 +347,9 @@ const errText = (e: any) => {
 
 http
   .createServer(async (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+    const origin = req.headers.origin;
+    if (originAllowed(origin)) res.setHeader("Access-Control-Allow-Origin", origin as string);
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     if (req.method === "OPTIONS") return void res.writeHead(204).end();

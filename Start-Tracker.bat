@@ -59,9 +59,47 @@ if "%NEED_BUILD%"=="1" (
   )
 )
 
-rem --- 4. Jalankan server + web, lalu buka browser ---
+rem --- 4. Nama lokal fsn.live.test (opsional): terlihat seperti domain dan tanpa :3000. Hanya di komputer ini (127.0.0.1). ---
+set "APP_DOMAIN=fsn.live.test"
+set "APP_URL=http://localhost:3000"
+set "HAVE_NAME=0"
+set "HOSTS=%SystemRoot%\System32\drivers\etc\hosts"
+findstr /C:"%APP_DOMAIN%" "%HOSTS%" >nul 2>nul && set "HAVE_NAME=1"
+if "%HAVE_NAME%"=="0" if not exist "%RUNTIME%\no-local-domain" (
+  echo.
+  echo Pasang nama lokal %APP_DOMAIN%? Alamat jadi http://%APP_DOMAIN% ^(tanpa :3000^), hanya terbuka di komputer ini.
+  echo Perlu izin Administrator sekali untuk menambah satu baris ke file hosts.
+  set "ANS="
+  set /p ANS="Pasang sekarang? [Y/n] "
+  if /i "!ANS:~0,1!"=="n" (
+    if not exist "%RUNTIME%" mkdir "%RUNTIME%"
+    type nul > "%RUNTIME%\no-local-domain"
+    echo Dilewati. Hapus file .runtime\no-local-domain jika ingin ditanya lagi.
+  ) else (
+    powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','Add-Content -Path $env:SystemRoot\System32\drivers\etc\hosts -Value ''127.0.0.1 fsn.live.test''; ipconfig /flushdns'"
+    findstr /C:"%APP_DOMAIN%" "%HOSTS%" >nul 2>nul && set "HAVE_NAME=1"
+    if "!HAVE_NAME!"=="1" (
+      echo [OK] Nama %APP_DOMAIN% terpasang.
+    ) else (
+      echo [!] Tidak bisa mengubah file hosts. Memakai http://localhost:3000.
+    )
+  )
+)
+if "%HAVE_NAME%"=="1" (
+  rem Port 80 supaya alamat tanpa :3000. Bila port 80 sudah dipakai program lain, tetap pakai :3000.
+  netstat -ano | findstr /R /C:":80 .*LISTENING" >nul 2>nul
+  if errorlevel 1 (
+    set "PORT=80"
+    set "APP_URL=http://%APP_DOMAIN%"
+  ) else (
+    set "APP_URL=http://%APP_DOMAIN%:3000"
+  )
+)
+
+rem --- 5. Jalankan server + web, lalu buka browser ---
 echo [..] Menjalankan aplikasi... jangan tutup jendela ini selama dipakai.
-start "" powershell -NoProfile -Command "Start-Sleep -Seconds 6; Start-Process 'http://localhost:3000'"
+echo      Alamat: %APP_URL%
+start "" powershell -NoProfile -Command "Start-Sleep -Seconds 6; Start-Process '%APP_URL%'"
 call npm start
 
 echo.
