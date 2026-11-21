@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import LevelBadge from "@/app/components/LevelBadge";
 import Avatar, { colorOf } from "@/app/components/Avatar";
 import { FaArrowDown, FaComment, FaDownload, FaMagnifyingGlass, FaPause, FaPlay, FaTrashCan, FaXmark } from "react-icons/fa6";
 
@@ -15,12 +16,15 @@ export default function CommentsPanel({
   onClear,
   onExportEmpty,
   className = "h-[26rem]",
+  visible = true,
 }: {
   comments: any[];
   total?: number;
   onClear: () => void;
   onExportEmpty?: () => void;
   className?: string;
+  /** false saat tab disembunyikan; saat tampil lagi, gulir ke komentar terbaru. */
+  visible?: boolean;
 }) {
   const listRef = useRef<HTMLUListElement>(null);
   const [query, setQuery] = useState("");
@@ -39,11 +43,14 @@ export default function CommentsPanel({
   const missed = paused ? comments.length - (frozen?.length ?? 0) : 0;
   const unseen = !stick && !paused ? Math.max(0, source.length - seen) : 0;
 
-  // Ikuti komentar terbaru selama pengguna berada di bawah.
-  useEffect(() => {
+  // Ikuti komentar terbaru selama pengguna berada di bawah. Kuncinya komentar terakhir (bukan jumlah): setelah daftar
+  // penuh (VISIBLE baris) jumlahnya tetap, sehingga dulu tidak lagi mengikuti dan daftar terlihat melompat.
+  // useLayoutEffect: menggulir sebelum browser menggambar, jadi tidak ada satu frame "bergeser".
+  const lastKey = shown.at(-1)?.id ?? shown.length;
+  useLayoutEffect(() => {
     const el = listRef.current;
     if (el && stick && !paused) el.scrollTop = el.scrollHeight;
-  }, [shown.length, stick, paused, q]);
+  }, [lastKey, stick, paused, q, visible]);
 
   const onScroll = () => {
     const el = listRef.current;
@@ -79,7 +86,7 @@ export default function CommentsPanel({
     "flex items-center gap-1.5 rounded-lg border border-line bg-white/5 px-2.5 py-1.5 text-xs transition hover:bg-white/10 disabled:opacity-50";
 
   return (
-    <section className={`flex flex-col overflow-hidden rounded-2xl border border-line bg-surface backdrop-blur-md ${className}`}>
+    <section className={`flex flex-col overflow-hidden rounded-2xl border border-line bg-surface ${className}`}>
       {/* Header */}
       <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
         <h3 className="flex items-center gap-2 font-semibold">
@@ -145,7 +152,7 @@ export default function CommentsPanel({
           ref={listRef}
           onScroll={onScroll}
           aria-live={paused ? "off" : "polite"}
-          className="scrollbar-thin h-full space-y-0.5 overflow-y-auto px-2 py-2 text-sm"
+          className="scrollbar-thin h-full space-y-0.5 overflow-y-auto overscroll-contain px-2 py-2 text-sm [contain:layout_paint]"
         >
           {shown.length ? (
             shown.map((c: any) => (
@@ -164,6 +171,7 @@ export default function CommentsPanel({
                     >
                       @{c.user}
                     </a>
+                    <LevelBadge level={c.level} />
                     <span className="shrink-0 text-[10px] tabular-nums text-muted/70">{time(c.ts)}</span>
                   </div>
                   <p className="break-words leading-snug text-gray-100">{c.text}</p>

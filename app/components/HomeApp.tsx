@@ -8,8 +8,7 @@ import { usePathname } from "next/navigation";
 import { FaStop, FaBookmark, FaMagnifyingGlass, FaArrowUpRightFromSquare, FaArrowUp } from "react-icons/fa6";
 import Toast from "@/app/components/Toast";
 import LiveStats from "@/app/components/LiveStats";
-import CommentsPanel from "@/app/components/CommentsPanel";
-import GiftsPanel from "@/app/components/GiftsPanel";
+import SidePanels from "@/app/components/SidePanels";
 import type { Quality } from "@/app/components/LivePlayer";
 import { useTikTokTracker } from "@/app/hooks/useTikTokTracker";
 import { API_URL } from "@/app/lib/config";
@@ -21,7 +20,7 @@ const LivePlayer = dynamic(() => import("@/app/components/LivePlayer"), {
 });
 
 // tracking = true: sesi lewat backend (komentar + gift + statistik). qualities kosong = menunggu video dari bookmarklet.
-type Stream = { username?: string; qualities: Quality[]; title?: string | null; cover?: string | null; tracking: boolean; key: number; vkey?: number };
+type Stream = { username?: string; qualities: Quality[]; title?: string | null; cover?: string | null; tracking: boolean; key: number; vkey?: number; ended?: boolean };
 
 const cleanUsername = (v: string) => v.trim().replace(/^@/, "");
 
@@ -64,6 +63,7 @@ export default function HomeApp() {
   const trackRef = useRef<(name?: string, override?: Quality[]) => Promise<void>>(async () => {});
   const streamRef = useRef<Stream | null>(null);
   streamRef.current = stream;
+  const [playerLayout, setPlayerLayout] = useState<"wide" | "mobile">("wide"); // bentuk pemutar (lebar/mobile), mengatur tata letak halaman
   const tiktokWinRef = useRef<Window | null>(null); // tab TikTok yang dibuka aplikasi (agar bookmark bisa mengirim balik)
   const [bookmarkSeen, setBookmarkSeen] = useState(false); // bookmark pernah dipakai di browser ini
 
@@ -103,6 +103,7 @@ export default function HomeApp() {
         /* abaikan */
       }
       setBookmarkSeen(true);
+      tiktokWinRef.current?.close(); // video sudah diterima: tab TikTok tidak diperlukan lagi
       const cur = streamRef.current;
       if (cur?.tracking && (!data.username || cur.username?.toLowerCase() === data.username.toLowerCase())) {
         // Sesi sudah berjalan (sedang menunggu video): pasang video tanpa memutus komentar/gift.
@@ -203,6 +204,22 @@ export default function HomeApp() {
 
   trackRef.current = handleTrack;
 
+  // Live berakhir (kabar dari server): putus otomatis, hentikan sesi di server, tapi biarkan komentar/gift tetap terlihat.
+  const endedHandledRef = useRef(false);
+  useEffect(() => {
+    if (!stream?.tracking) {
+      endedHandledRef.current = false;
+      return;
+    }
+    if (tracker.connectionStatus !== "ended" || endedHandledRef.current) return;
+    endedHandledRef.current = true;
+    void fetch(`${API_URL}/stop_tracking`, { method: "POST" }).catch(() => {});
+    tracker.stop("ended");
+    setStream((s) => (s ? { ...s, ended: true } : s));
+    showToast(`Live @${stream.username ?? ""} telah berakhir. Koneksi diputus otomatis.`, "success");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tracker.connectionStatus, stream?.tracking]);
+
   const handleClose = async () => {
     if (stream?.tracking) {
       try {
@@ -230,9 +247,22 @@ export default function HomeApp() {
 
   return (
     <div hidden={pathname !== "/" && !plain}>
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 pb-8">
+    <div
+      className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 pb-8"
+      // Saat live berjalan (tampilan biasa): lebar menyesuaikan tinggi layar, sehingga video 16:9 + panel samping (380px + jarak + padding)
+      // paling besar yang masih muat tanpa scroll. Layar rendah -> lebih sempit; layar tinggi/lebar -> sampai 96rem.
+      style={
+        stream && !plain
+          ? { maxWidth: playerLayout === "mobile" ? "72rem" : "max(72rem, min(96rem, calc((100dvh - 17rem) * 16 / 9 + 436px)))" }
+          : stream && plain
+            ? { maxWidth: "96rem" }
+            : undefined
+      }
+    >
       <AnimatePresence>{toast && <Toast key="toast" message={toast.message} type={toast.type} />}</AnimatePresence>
 
+      {/* Saat live berjalan, judul dan form disembunyikan agar video (+ chat) muat dalam satu layar. Di "Video Saja", tombol Tutup ada di dalam pemutar. */}
+      {!stream && (
       <motion.section
         initial={{ opacity: 0, y: -12 }}
         animate={{ opacity: 1, y: 0 }}
@@ -293,9 +323,10 @@ export default function HomeApp() {
           </button>
         </form>
       </motion.section>
+      )}
 
       {stream ? (
-        <motion.section key={stream.key} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-6">
+        <motion.section key={stream.key} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-4">
           {!plain && (
             <>
           {stream.tracking ? (
@@ -306,6 +337,8 @@ export default function HomeApp() {
               totalViews={tracker.totalViews}
               gifts={tracker.gifts.length}
               comments={tracker.commentTotal}
+              title={stream.title}
+              onClose={handleClose}
             />
           ) : (
             <div className="flex items-center gap-3">
@@ -325,13 +358,14 @@ export default function HomeApp() {
             </>
           )}
 
-          {!plain && stream.title && stream.tracking && <p className="-mt-3 truncate text-sm text-muted">{stream.title}</p>}
 
-          <div className={stream.tracking && !plain ? "grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_380px]" : ""}>
+          <div className={stream.tracking && !plain ? `grid items-start gap-6 lg:items-stretch ${playerLayout === "mobile" ? "lg:grid-cols-[max-content_minmax(0,1fr)]" : "lg:grid-cols-[minmax(0,1fr)_380px]"}` : ""}>
             <div className={stream.tracking && !plain ? "min-w-0" : ""}>
             {stream.qualities.length > 0 ? (
-              <div className={stream.tracking && !plain ? "w-full" : plain ? "mx-auto w-full max-w-4xl" : "mx-auto w-full max-w-3xl"}>
-                <LivePlayer key={stream.vkey ?? 0} qualities={stream.qualities} username={stream.username} thumbnail={stream.cover} plain={plain} />
+              <div className={stream.tracking && !plain ? (playerLayout === "mobile" ? "w-max max-w-full" : "w-full") : plain ? "mx-auto w-full" : "mx-auto w-full max-w-3xl"}
+                style={plain ? { maxWidth: "calc((100dvh - 6.5rem) * 16 / 9)" } : undefined}
+              >
+                <LivePlayer key={stream.vkey ?? 0} qualities={stream.qualities} username={stream.username} thumbnail={stream.cover} plain={plain} onLayoutChange={setPlayerLayout} onClose={plain ? handleClose : undefined} ended={!!stream.ended} gifts={stream.tracking && !plain ? tracker.gifts : undefined} goals={stream.tracking && !plain ? tracker.goals : undefined} />
               </div>
             ) : (
               <div className="mx-auto w-full max-w-3xl rounded-2xl border border-line bg-surface px-6 py-8 text-center backdrop-blur-md">
@@ -370,18 +404,17 @@ export default function HomeApp() {
             </div>
 
             {stream.tracking && !plain && (
-              <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-20">
-                <CommentsPanel
+              <aside className="min-w-0 lg:relative lg:min-h-[26rem]">
+                <SidePanels
                   comments={tracker.comments}
-                  total={tracker.commentTotal}
-                  onClear={() => {
+                  commentTotal={tracker.commentTotal}
+                  gifts={tracker.gifts}
+                  onClearComments={() => {
                     tracker.clearComments();
                     showToast("Komentar dibersihkan.", "success");
                   }}
                   onExportEmpty={() => showToast("Belum ada komentar untuk diekspor.", "error")}
-                  className="h-[26rem]"
                 />
-                <GiftsPanel gifts={tracker.gifts} className="h-[24rem]" />
               </aside>
             )}
           </div>

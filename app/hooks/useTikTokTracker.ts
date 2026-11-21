@@ -13,6 +13,7 @@ export function useTikTokTracker() {
   const [viewerCount, setViewerCount] = useState<number | null>(null);
   const [totalViews, setTotalViews] = useState(0);
   const [giftTotal, setGiftTotal] = useState(0);
+  const [goals, setGoals] = useState<any[]>([]); // target/challenge gift yang sedang aktif
   const [commentTotal, setCommentTotal] = useState(0); // total diterima sejak track dimulai (tidak terpotong)
 
   const socketRef = useRef<WebSocket | null>(null);
@@ -54,6 +55,9 @@ export function useTikTokTracker() {
         case "gift":
           setGifts((p) => [...p, stamp(data)].slice(-MAX_GIFTS));
           break;
+        case "goal":
+          setGoals(Array.isArray(data.goals) ? data.goals : []);
+          break;
         case "viewer":
           if (data.viewerCount != null) setViewerCount(data.viewerCount);
           if (data.totalViews) setTotalViews(data.totalViews);
@@ -75,6 +79,19 @@ export function useTikTokTracker() {
     setTotalViews(0);
     setGiftTotal(0);
     setCommentTotal(0);
+    setGoals([]);
+  };
+
+  // Putuskan koneksi tetapi biarkan komentar/gift/statistik tetap terlihat (dipakai saat live berakhir).
+  const stop = (finalStatus = "ended") => {
+    const ws = socketRef.current;
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+      socketRef.current = null;
+    }
+    setConnectionStatus(finalStatus);
   };
 
   const clearComments = () => setComments([]);
@@ -95,9 +112,11 @@ export function useTikTokTracker() {
     viewerCount,
     totalViews,
     giftTotal,
+    goals,
     commentTotal,
     connect,
     disconnect,
+    stop,
     clearComments,
   };
 }

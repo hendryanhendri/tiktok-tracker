@@ -3,16 +3,47 @@
 Tonton live TikTok dengan pilihan kualitas (rendah → tinggi), mode audio, tampilan mobile/lebar, fullscreen,
 Picture-in-Picture, plus komentar, gift, dan viewer. Frontend Next.js + backend Node kecil. Tanpa Python.
 
+**Rekam video/audio:** bawaannya **Unduh di akhir** (disimpan di memori sampai maksimal 500 MB, lalu diunduh; jalan di semua browser, termasuk Brave).
+Untuk rekaman panjang di Chrome/Edge, pilih **Simpan rekaman → Langsung ke disk** di menu pengaturan (gear); Chrome akan menampilkan dialog simpan dan izin tulis.
+**Target (challenge) gift** yang sedang aktif di live tampil sebagai bar progres di pojok kiri atas video (ikut tombol "Gift di layar").
+
 ## Menjalankan di Windows (satu klik)
 
 Download/clone project, lalu **klik dua kali `Start-Tracker.bat`**. Pertama kali, skrip otomatis
 mengunduh Node.js portable (jika belum terpasang), memasang dependency, dan build — butuh internet
 dan beberapa menit. Setelah itu browser terbuka ke `http://localhost:3000`. Run berikutnya langsung cepat.
 
+> **Update kode:** kedua launcher (Windows dan macOS) membandingkan file kode dengan build terakhir. Jika ada yang lebih baru
+> (misalnya setelah mengganti file dengan versi baru), aplikasi dibangun ulang otomatis; jika tidak, langsung jalan.
+> Setelah update, jalankan ulang juga backend-nya (launcher sudah menjalankan keduanya sekaligus).
+
+### Nama lokal `fsn.live.test` (opsional)
+
+Saat pertama kali dijalankan, launcher menawarkan nama lokal **`http://fsn.live.test`** (tanpa `:3000`) sebagai pengganti `localhost`.
+Jika disetujui, launcher menambah satu baris `127.0.0.1 fsn.live.test` ke file hosts (butuh password Mac / izin Administrator
+Windows **sekali**), lalu memakai port 80; bila port 80 sedang dipakai program lain, alamatnya `http://fsn.live.test:3000`.
+
+- Hanya berlaku di komputer ini. Nama itu mengarah ke 127.0.0.1, tidak dibuka ke internet, dan backend tetap hanya mendengarkan 127.0.0.1.
+- Jawab `n` untuk melewati (tidak ditanya lagi; hapus file `.runtime/no-local-domain` untuk ditanya lagi). Menghapus nama: hapus baris itu dari file hosts.
+- **Catatan:** tanpa HTTPS, browser menganggap `http://fsn.live.test` bukan "secure context" (berbeda dengan `localhost`). Akibatnya
+  **Rekam** tidak bisa menulis langsung ke disk (rekaman disimpan di memori, maksimal 500 MB, lalu diunduh) dan tombol **Salin diagnosa**
+  memakai kotak salin manual. Tampilan, pemutaran, komentar, gift, dan PiP berjalan normal. Butuh semua fitur? Pakai `http://localhost:3000`.
+- Origin lain bisa ditambahkan lewat `ALLOWED_ORIGIN` (lihat tabel di bawah).
+
 ### macOS
 
-Klik dua kali **`Start-Tracker.command`** (langkahnya sama). Jika macOS memblokir karena file hasil download,
-klik kanan file → **Open** → **Open** (cukup sekali), atau jalankan `xattr -dr com.apple.quarantine .` di folder project.
+**Paling mudah (tanpa peringatan Apple):** buka **Terminal**, tempel satu baris ini, lalu Enter.
+Mengunduh lewat `curl` tidak diberi tanda karantina, jadi langsung jalan.
+
+```bash
+curl -L https://github.com/hendryanhendri/tiktok-tracker/archive/refs/heads/feat/Hendri-update.zip -o tt.zip && unzip -q tt.zip && cd tiktok-tracker-feat-Hendri-update && bash Start-Tracker.command
+```
+
+(Repo harus public agar `curl` bisa mengunduh. Jika private, pakai cara di bawah.)
+
+**Jika download ZIP lewat browser:** macOS memblokir `Start-Tracker.command` ("Apple could not verify…").
+Klik **Done**, lalu buka **System Settings → Privacy & Security → Open Anyway** (cukup sekali),
+atau jalankan di folder project: `xattr -dr com.apple.quarantine .`
 
 ## Menjalankan (manual)
 
@@ -49,7 +80,7 @@ TIKTOK_SIGN_API_KEY=euler_xxxxxxxx    # opsional
 | `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_WS_URL` | `http://localhost:8000` / `ws://localhost:8001` | URL backend untuk frontend |
 | `API_PORT` / `WS_PORT` | `8000` / `8001` | Port backend |
 | `HOST` | `127.0.0.1` | Backend tanpa autentikasi: jangan dibuka ke jaringan |
-| `ALLOWED_ORIGIN` | `http://localhost:3000` | Origin yang diizinkan CORS |
+| `ALLOWED_ORIGIN` | (kosong) | Origin tambahan yang diizinkan CORS, pisahkan dengan koma. Bawaan sudah: `localhost`, `127.0.0.1`, `fsn.live.test` |
 
 ## Catatan
 
