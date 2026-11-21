@@ -106,6 +106,7 @@ async function startSession(username: string): Promise<Session> {
           coins: (Number(gd.diamondCount) || 0) * count, // nilai koin total (jumlah x harga)
           icon: firstUrl(gd.giftImage) ?? firstUrl(gd.image) ?? firstUrl(gd.icon) ?? (typeof gd.giftPictureUrl === "string" ? gd.giftPictureUrl : undefined),
           avatar: userAvatar(d.user),
+          level: Number(d.user?.payGrade?.level) || 0, // level gifter TikTok (0 = tidak diketahui)
         });
       }
     });

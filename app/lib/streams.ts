@@ -237,7 +237,8 @@ const BOOKMARKLET = String.raw`(async function (origin) {
       t.textContent = "✓ Video terkirim ke aplikasi";
       t.style.cssText = "position:fixed;z-index:2147483647;top:16px;left:50%;transform:translateX(-50%);background:#16a34a;color:#fff;padding:10px 16px;border-radius:10px;font:600 14px system-ui;box-shadow:0 4px 20px rgba(0,0,0,.4)";
       document.body.appendChild(t);
-      setTimeout(() => t.remove(), 2500);
+      // Tutup tab TikTok otomatis (bisa karena tab ini dibuka oleh aplikasi).
+      setTimeout(() => { t.remove(); try { window.close(); } catch (e) {} }, 700);
       return;
     }
   } catch (e) {}
@@ -246,6 +247,7 @@ const BOOKMARKLET = String.raw`(async function (origin) {
   const link = origin + "/#s=" + encodeURIComponent(b64);
   const w = window.open(link, "_blank");
   if (!w) prompt("Popup diblokir browser. Salin alamat ini lalu buka di tab baru:", link);
+  else setTimeout(() => { try { window.close(); } catch (e) {} }, 500); // hanya berhasil bila tab ini dibuka lewat skrip; selain itu diabaikan browser
 })`;
 
 export const bookmarkletHref = (origin: string) =>

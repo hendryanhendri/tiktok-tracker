@@ -24,11 +24,19 @@ import {
   FaWindowRestore,
   FaCircleDot,
   FaStop,
+  FaGift,
 } from "react-icons/fa6";
 import type { IconType } from "react-icons";
 import { API_URL } from "@/app/lib/config";
 
-export type Quality = { id: string; label: string; url: string; alts?: string[]; height?: number; audioOnly?: boolean };
+export type Quality = {
+  id: string;
+  label: string;
+  url: string;
+  alts?: string[];
+  height?: number;
+  audioOnly?: boolean;
+};
 type Mode = "video" | "audio";
 type Layout = "wide" | "mobile";
 
@@ -109,12 +117,16 @@ function MenuRow({
   );
 }
 
+type GiftEvent = { id: number; user?: string; gift?: string; count?: number; icon?: string; avatar?: string; level?: number };
+const GIFT_POPUP_MS = 6000;
+
 export default function LivePlayer({
   qualities,
   username,
   thumbnail,
   initialMode = "video",
   plain = false,
+  gifts,
 }: {
   qualities: Quality[];
   username?: string;
@@ -122,6 +134,8 @@ export default function LivePlayer({
   initialMode?: "video" | "audio";
   /** Tampilan polos: hanya video + suara (tanpa toolbar, menu pengaturan, rekam, atau info teknis). */
   plain?: boolean;
+  /** Daftar gift dari tracker (bila ada): ditampilkan sebagai notifikasi di atas video. */
+  gifts?: GiftEvent[];
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -147,8 +161,49 @@ export default function LivePlayer({
       return false;
     }
   });
+  // Notifikasi gift di layar: hanya gift yang masuk setelah pemutar dibuka (riwayat lama tidak diputar ulang).
+  const [giftOverlay, setGiftOverlay] = useState(() => {
+    try {
+      return localStorage.getItem("tt-giftov") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const [giftPopups, setGiftPopups] = useState<GiftEvent[]>([]);
+  const seenGiftRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!gifts) return;
+    const maxId = gifts.reduce((m, g) => Math.max(m, g.id), 0);
+    if (seenGiftRef.current === null || gifts.length === 0) {
+      seenGiftRef.current = maxId;
+      return;
+    }
+    const fresh = gifts.filter((g) => g.id > (seenGiftRef.current ?? 0));
+    seenGiftRef.current = maxId;
+    if (!fresh.length) return;
+    setGiftPopups((p) => [...p, ...fresh].slice(-4));
+    for (const g of fresh) setTimeout(() => setGiftPopups((p) => p.filter((x) => x.id !== g.id)), GIFT_POPUP_MS);
+  }, [gifts]);
+  const toggleGiftOverlay = () => {
+    const next = !giftOverlay;
+    setGiftOverlay(next);
+    try {
+      localStorage.setItem("tt-giftov", next ? "1" : "0");
+    } catch {
+      /* abaikan */
+    }
+  };
   const [lag, setLag] = useState<number | null>(null); // perkiraan jeda: buffer di depan posisi putar (detik)
   const [playing, setPlaying] = useState(true);
+  // Kontrol buatan sendiri: muncul saat mouse/sentuhan, hilang sendiri setelah 3 detik bila sedang diputar.
+  const [ctlVisible, setCtlVisible] = useState(true);
+  const ctlTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pokeControls = useCallback(() => {
+    setCtlVisible(true);
+    if (ctlTimerRef.current) clearTimeout(ctlTimerRef.current);
+    ctlTimerRef.current = setTimeout(() => setCtlVisible(false), 3000);
+  }, []);
+  useEffect(() => () => void (ctlTimerRef.current && clearTimeout(ctlTimerRef.current)), []);
   const [vol, setVol] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [noVideo, setNoVideo] = useState(false); // stream tidak punya gambar (khusus audio / codec tak didukung)
@@ -172,7 +227,11 @@ export default function LivePlayer({
   const [failReason, setFailReason] = useState<string | null>(null);
   const [dims, setDims] = useState<string | null>(null); // resolusi yang benar-benar sedang diputar
   // Rekam (di browser, tanpa instalasi apa pun)
-  type RecState = { kind: "video" | "audio"; startedAt: number; toDisk: boolean };
+  type RecState = {
+    kind: "video" | "audio";
+    startedAt: number;
+    toDisk: boolean;
+  };
   const [rec, setRec] = useState<RecState | null>(null);
   const [recMsg, setRecMsg] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -183,9 +242,7 @@ export default function LivePlayer({
 
   // Mode audio: format audio saja bila ada, kalau tidak video kualitas terendah (hemat data).
   const selected =
-    mode === "audio"
-      ? (audioQ ?? lowestVideo ?? qualities[0])
-      : (videoQ.find((q) => q.id === videoId) ?? videoQ.at(-1) ?? qualities[0]);
+    mode === "audio" ? (audioQ ?? lowestVideo ?? qualities[0]) : (videoQ.find((q) => q.id === videoId) ?? videoQ.at(-1) ?? qualities[0]);
   const candidates = selected ? [selected.url, ...(selected.alts ?? [])] : [];
   const baseUrl = candidates[variant] ?? selected?.url ?? "";
   const src = baseUrl ? (useProxy ? `${API_URL}/proxy?u=${encodeURIComponent(baseUrl)}` : baseUrl) : "";
@@ -288,22 +345,26 @@ export default function LivePlayer({
     const start = async () => {
       // Cek cepat status sumber: 404/403/410 = live berakhir atau URL kedaluwarsa.
       const ctrl = new AbortController();
-      if (!isFlv(src)) try {
-        const res = await fetch(src, { signal: ctrl.signal, cache: "no-store" });
-        ctrl.abort();
-        if (cancelled) return;
-        log(`preflight HTTP ${res.status}`);
-        if ([403, 404, 410].includes(res.status)) {
-          return fail(
-            `TikTok membalas HTTP ${res.status}. Live kemungkinan sudah berakhir atau URL kedaluwarsa. Buka live-nya lagi lalu klik bookmarklet.`,
-            true,
-          );
+      if (!isFlv(src))
+        try {
+          const res = await fetch(src, {
+            signal: ctrl.signal,
+            cache: "no-store",
+          });
+          ctrl.abort();
+          if (cancelled) return;
+          log(`preflight HTTP ${res.status}`);
+          if ([403, 404, 410].includes(res.status)) {
+            return fail(
+              `TikTok membalas HTTP ${res.status}. Live kemungkinan sudah berakhir atau URL kedaluwarsa. Buka live-nya lagi lalu klik bookmarklet.`,
+              true,
+            );
+          }
+        } catch (e) {
+          if (cancelled) return;
+          log(`preflight gagal: ${String((e as Error)?.message ?? e).slice(0, 80)}`);
+          if (!useProxy) return fail(""); // CORS/jaringan -> proxy
         }
-      } catch (e) {
-        if (cancelled) return;
-        log(`preflight gagal: ${String((e as Error)?.message ?? e).slice(0, 80)}`);
-        if (!useProxy) return fail(""); // CORS/jaringan -> proxy
-      }
 
       timer = setTimeout(() => fail("Tidak ada data video setelah 12 detik. Coba kualitas lain atau ambil ulang URL.", useProxy), 12000);
 
@@ -325,9 +386,27 @@ export default function LivePlayer({
             },
           );
           player.attachMediaElement(video);
+          let reconnects = 0;
+          video.addEventListener("playing", () => (reconnects = 0)); // pulih: hitung ulang dari nol
           player.on(mpegts.Events.ERROR, (type: string, detail: string, info: unknown) => {
             log(`FLV error ${type}/${detail} ${JSON.stringify(info ?? {}).slice(0, 160)}`);
             const reason = `FLV error: ${type} / ${detail}`;
+            // Koneksi putus/lambat: sambung ulang di tempat (gambar terakhir tetap tampil), jangan bongkar pemutar.
+            if (type === mpegts.ErrorTypes.NETWORK_ERROR && reconnects < 6 && !cancelled) {
+              reconnects++;
+              log(`FLV putus, sambung ulang ${reconnects}/6`);
+              setTimeout(() => {
+                if (cancelled) return;
+                try {
+                  player.unload();
+                  player.load();
+                  void video.play().catch(() => {});
+                } catch {
+                  fail(reason);
+                }
+              }, 1000 * reconnects);
+              return;
+            }
             // Codec tidak didukung bukan masalah jaringan: lewati proxy, langsung coba varian lain.
             if (/CodecUnsupported|Unsupported codec/i.test(`${detail} ${JSON.stringify(info ?? {})}`)) {
               log("codec tidak didukung -> varian berikutnya");
@@ -336,7 +415,9 @@ export default function LivePlayer({
             fail(reason);
           });
           player.on(mpegts.Events.MEDIA_INFO, (info: Record<string, unknown>) => {
-            const { metadata: _m, ...rest } = info as { metadata?: unknown } & Record<string, unknown>; // eslint-disable-line @typescript-eslint/no-unused-vars
+            const { metadata: _m, ...rest } = info as {
+              metadata?: unknown;
+            } & Record<string, unknown>; // eslint-disable-line @typescript-eslint/no-unused-vars
             mediaInfoRef.current = { kind: "flv", ...rest };
             log(`FLV media info: video=${String(rest.videoCodec)} audio=${String(rest.audioCodec)} ${String(rest.width)}x${String(rest.height)}`);
           });
@@ -358,28 +439,59 @@ export default function LivePlayer({
       } else if (Hls.isSupported()) {
         const hls = new Hls(
           lowLatency
-            ? { lowLatencyMode: true, liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 4, maxBufferLength: 8, backBufferLength: 10 }
-            : { lowLatencyMode: false, liveSyncDurationCount: 4, maxBufferLength: 30 },
+            ? {
+                lowLatencyMode: true,
+                liveSyncDurationCount: 2,
+                liveMaxLatencyDurationCount: 4,
+                maxBufferLength: 8,
+                backBufferLength: 10,
+              }
+            : {
+                lowLatencyMode: false,
+                liveSyncDurationCount: 4,
+                maxBufferLength: 30,
+              },
         );
+        let hlsRetries = 0;
+        video.addEventListener("playing", () => (hlsRetries = 0));
         hls.loadSource(src);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
           mediaInfoRef.current = {
             ...mediaInfoRef.current,
             kind: "hls",
-            levels: data.levels.map((l) => ({ w: l.width, h: l.height, kbps: Math.round(l.bitrate / 1000), v: l.videoCodec, a: l.audioCodec })),
+            levels: data.levels.map((l) => ({
+              w: l.width,
+              h: l.height,
+              kbps: Math.round(l.bitrate / 1000),
+              v: l.videoCodec,
+              a: l.audioCodec,
+            })),
           };
           void tryPlay();
         });
         hls.on(Hls.Events.BUFFER_CODECS, (_e, d) => {
           mediaInfoRef.current = {
             ...mediaInfoRef.current,
-            bufferCodecs: { video: d.video ? d.video.codec : "TIDAK ADA", audio: d.audio ? d.audio.codec : "TIDAK ADA" },
+            bufferCodecs: {
+              video: d.video ? d.video.codec : "TIDAK ADA",
+              audio: d.audio ? d.audio.codec : "TIDAK ADA",
+            },
           };
         });
         hls.on(Hls.Events.ERROR, (_e, data) => {
           console.warn("HLS error:", data.type, data.details);
-          if (data.fatal) fail(`HLS error: ${data.details}`);
+          if (!data.fatal) return;
+          // Pulihkan di tempat dulu (buffer yang sudah diproses tetap dipakai); baru menyerah bila berulang.
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR && hlsRetries < 6) {
+            hlsRetries++;
+            log(`HLS jaringan bermasalah, muat ulang ${hlsRetries}/6`);
+            setTimeout(() => !cancelled && hls.startLoad(), 1000 * hlsRetries);
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && hlsRetries < 6) {
+            hlsRetries++;
+            log(`HLS media error, pulihkan ${hlsRetries}/6`);
+            hls.recoverMediaError();
+          } else fail(`HLS error: ${data.details}`);
         });
         destroy = () => hls.destroy();
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -407,7 +519,6 @@ export default function LivePlayer({
     };
   }, [src, useProxy, variant, candidates.length, log, lowLatency]);
 
-
   const copyDiagnosis = async () => {
     const v = videoRef.current;
     const ms = typeof MediaSource !== "undefined" ? MediaSource : null;
@@ -421,7 +532,9 @@ export default function LivePlayer({
       `dukungan MSE: H264=${sup('video/mp4; codecs="avc1.64001f"')} HEVC=${sup('video/mp4; codecs="hvc1.1.6.L93.B0"')} AAC=${sup('audio/mp4; codecs="mp4a.40.2"')}`,
       `mode: ${mode} | kualitas: ${selected?.label} | tanpaGambar=${noVideo}`,
       `varian: ${variant + 1}/${candidates.length} | via proxy: ${useProxy}`,
-      ...candidates.map((u, i) => `  ${i === variant ? ">" : " "} ${i + 1}. ${isFlv(u) ? "FLV" : "HLS"} ${new URL(u).host}/…/${u.split("?")[0].split("/").pop()}`),
+      ...candidates.map(
+        (u, i) => `  ${i === variant ? ">" : " "} ${i + 1}. ${isFlv(u) ? "FLV" : "HLS"} ${new URL(u).host}/…/${u.split("?")[0].split("/").pop()}`,
+      ),
       `video: ${v?.videoWidth}x${v?.videoHeight} | readyState=${v?.readyState} paused=${v?.paused} muted=${v?.muted} t=${v?.currentTime.toFixed(1)}`,
       `buffer: [${ranges.join(", ")}] | frame: total=${q?.totalVideoFrames} dropped=${q?.droppedVideoFrames}`,
       `waiting=${statsRef.current.waiting} stalled=${statsRef.current.stalled}`,
@@ -463,7 +576,10 @@ export default function LivePlayer({
     if (!v || recorderRef.current?.state === "recording") return;
     const cap = (v as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
     if (!cap || typeof MediaRecorder === "undefined") return setRecMsg("Browser ini tidak mendukung perekaman.");
-    if (v.muted) return setRecMsg("Suara video sedang mati, hasil rekaman akan tanpa suara. Nyalakan suara dulu (klik 'Suara mati' di pemutar), lalu rekam lagi.");
+    if (v.muted)
+      return setRecMsg(
+        "Suara video sedang mati, hasil rekaman akan tanpa suara. Nyalakan suara dulu (klik 'Suara mati' di pemutar), lalu rekam lagi.",
+      );
     const tracks = kind === "audio" ? cap.getAudioTracks() : cap.getTracks();
     if (!tracks.length) return setRecMsg("Belum ada data untuk direkam. Tunggu sampai video tampil.");
 
@@ -480,12 +596,21 @@ export default function LivePlayer({
     // Chrome/Edge: tulis langsung ke disk (aman untuk rekaman panjang). Lainnya: simpan di memori (dibatasi).
     // Harus dipanggil langsung dari klik pengguna, sebelum await lain.
     let writable: FileSystemWritableFileStream | null = null;
-    const picker = (window as unknown as { showSaveFilePicker?: (o: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker;
+    const picker = (
+      window as unknown as {
+        showSaveFilePicker?: (o: unknown) => Promise<FileSystemFileHandle>;
+      }
+    ).showSaveFilePicker;
     if (picker) {
       try {
         const handle = await picker({
           suggestedName: filename,
-          types: [{ description: kind === "audio" ? "Audio" : "Video", accept: { [mime.split(";")[0] || `${kind}/webm`]: [`.${ext}`] } }],
+          types: [
+            {
+              description: kind === "audio" ? "Audio" : "Video",
+              accept: { [mime.split(";")[0] || `${kind}/webm`]: [`.${ext}`] },
+            },
+          ],
         });
         writable = await handle.createWritable();
       } catch (e) {
@@ -680,106 +805,115 @@ export default function LivePlayer({
     const m = /^(\d+)×(\d+)$/.exec(dims ?? "");
     return m ? Number(m[2]) > Number(m[1]) : false;
   })();
+  // Rasio asli video (bila diketahui dan potret); dipakai agar panggung mobile pas dengan gambarnya, tanpa pita hitam.
+  const vidRatio = (() => {
+    const m = /^(\d+)×(\d+)$/.exec(dims ?? "");
+    const r = m ? Number(m[1]) / Number(m[2]) : 9 / 16;
+    return r < 1 ? Math.min(Math.max(r, 0.4), 0.75) : 9 / 16;
+  })();
   const effLayout: Layout = layoutUser ?? (plain && portrait ? "mobile" : "wide"); // otomatis: mode polos mengikuti bentuk video
   const audioUI = audioMode || noVideoUi; // tampilan panel audio (dipilih pengguna, atau stream memang tanpa gambar)
 
   return (
-    <div className={plain ? "overflow-hidden rounded-xl bg-black" : "overflow-hidden rounded-2xl border border-line bg-surface shadow-xl backdrop-blur-md"}>
+    <div
+      className={
+        plain ? "overflow-hidden rounded-xl bg-black" : "overflow-hidden rounded-2xl border border-line bg-surface shadow-xl backdrop-blur-md"
+      }
+    >
       {!plain && (
         <>
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-3 py-2.5">
-        <div role="tablist" aria-label="Mode pemutaran" className="flex gap-1 rounded-lg border border-line bg-black/20 p-1">
-          {(
-            [
-              { id: "video", label: "Video", icon: FaVideo },
-              { id: "audio", label: "Audio", icon: FaHeadphones },
-            ] as const
-          ).map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              role="tab"
-              type="button"
-              aria-selected={mode === id}
-              onClick={() => changeMode(id)}
-              className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs transition ${
-                mode === id ? "bg-white/15 font-medium text-white" : "text-muted hover:text-white"
-              }`}
-            >
-              <Icon aria-hidden className="h-3 w-3" />
-              {label}
-            </button>
-          ))}
-        </div>
+          {/* Toolbar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-3 py-2.5">
+            <div role="tablist" aria-label="Mode pemutaran" className="flex gap-1 rounded-lg border border-line bg-black/20 p-1">
+              {(
+                [
+                  { id: "video", label: "Video", icon: FaVideo },
+                  { id: "audio", label: "Audio", icon: FaHeadphones },
+                ] as const
+              ).map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  role="tab"
+                  type="button"
+                  aria-selected={mode === id}
+                  onClick={() => changeMode(id)}
+                  className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs transition ${
+                    mode === id ? "bg-white/15 font-medium text-white" : "text-muted hover:text-white"
+                  }`}
+                >
+                  <Icon aria-hidden className="h-3 w-3" />
+                  {label}
+                </button>
+              ))}
+            </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {rec ? (
-            <button
-              type="button"
-              onClick={stopRecording}
-              className="flex items-center gap-2 rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold tabular-nums transition hover:bg-rose-500"
-            >
-              <FaStop aria-hidden className="h-3 w-3" /> Berhenti · {fmtTime(now - rec.startedAt)} · {fmtBytes(recBytesRef.current)}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={startRecording}
-              disabled={loading || failed}
-              title={mode === "audio" ? "Rekam audio saja" : "Rekam video + audio"}
-              className="flex items-center gap-2 rounded-lg border border-line bg-white/5 px-3 py-2 text-xs transition hover:bg-white/10"
-            >
-              <FaCircleDot aria-hidden className="h-3 w-3 text-accent" /> Rekam {mode === "audio" ? "audio" : "video"}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {(rec || recMsg) && (
-        <div role="status" className="flex items-center justify-between gap-2 border-b border-line bg-black/20 px-3 py-2 text-xs">
-          {rec ? (
-            <span className="flex items-center gap-2 text-rose-300">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" />
-              Merekam {rec.kind === "audio" ? "audio" : "video + audio"} · {rec.toDisk ? "langsung ke disk" : "disimpan di memori, lalu diunduh"}
-            </span>
-          ) : (
-            <span className="text-amber-200">{recMsg}</span>
-          )}
-          {!rec && (
-            <button type="button" onClick={() => setRecMsg(null)} className="shrink-0 text-muted hover:text-white">
-              Tutup
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Info teknis (tersembunyi secara default) */}
-      {baseUrl && (
-        <details className="group border-b border-line text-[11px] text-muted">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 hover:text-white">
-            <span className="transition group-open:rotate-90">▸</span>
-            Info teknis
-          </summary>
-          <div className="flex items-center justify-between gap-3 px-3 pb-2">
-            <span className="truncate" title={baseUrl}>
-              Sumber: <span className="text-white/80">{baseUrl.split("?")[0].split("/").pop()}</span> ·{" "}
-              {isFlv(baseUrl) ? "FLV" : "HLS"} · {useProxy ? "via proxy" : "langsung"}
-              {candidates.length > 1 && ` · varian ${variant + 1}/${candidates.length}`}
-              {dims && ` · diputar ${dims}`}
-              {lag !== null && ` · jeda buffer ${lag.toFixed(1)} dtk`}
-              {lowLatency && " · latensi rendah"}
-            </span>
-            <button
-              type="button"
-              onClick={copyDiagnosis}
-              className="shrink-0 rounded-md border border-line bg-white/5 px-2 py-1 text-[11px] text-white transition hover:bg-white/10"
-            >
-              {copied ? "Tersalin ✓" : "Salin diagnosa"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {rec ? (
+                <button
+                  type="button"
+                  onClick={stopRecording}
+                  className="flex items-center gap-2 rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold tabular-nums transition hover:bg-rose-500"
+                >
+                  <FaStop aria-hidden className="h-3 w-3" /> Berhenti · {fmtTime(now - rec.startedAt)} · {fmtBytes(recBytesRef.current)}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startRecording}
+                  disabled={loading || failed}
+                  title={mode === "audio" ? "Rekam audio saja" : "Rekam video + audio"}
+                  className="flex items-center gap-2 rounded-lg border border-line bg-white/5 px-3 py-2 text-xs transition hover:bg-white/10"
+                >
+                  <FaCircleDot aria-hidden className="h-3 w-3 text-accent" /> Rekam {mode === "audio" ? "audio" : "video"}
+                </button>
+              )}
+            </div>
           </div>
-        </details>
-      )}
 
+          {(rec || recMsg) && (
+            <div role="status" className="flex items-center justify-between gap-2 border-b border-line bg-black/20 px-3 py-2 text-xs">
+              {rec ? (
+                <span className="flex items-center gap-2 text-rose-300">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" />
+                  Merekam {rec.kind === "audio" ? "audio" : "video + audio"} · {rec.toDisk ? "langsung ke disk" : "disimpan di memori, lalu diunduh"}
+                </span>
+              ) : (
+                <span className="text-amber-200">{recMsg}</span>
+              )}
+              {!rec && (
+                <button type="button" onClick={() => setRecMsg(null)} className="shrink-0 text-muted hover:text-white">
+                  Tutup
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Info teknis (tersembunyi secara default) */}
+          {baseUrl && (
+            <details className="group border-b border-line text-[11px] text-muted">
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 hover:text-white">
+                <span className="transition group-open:rotate-90">▸</span>
+                Info teknis
+              </summary>
+              <div className="flex items-center justify-between gap-3 px-3 pb-2">
+                <span className="truncate" title={baseUrl}>
+                  Sumber: <span className="text-white/80">{baseUrl.split("?")[0].split("/").pop()}</span> · {isFlv(baseUrl) ? "FLV" : "HLS"} ·{" "}
+                  {useProxy ? "via proxy" : "langsung"}
+                  {candidates.length > 1 && ` · varian ${variant + 1}/${candidates.length}`}
+                  {dims && ` · diputar ${dims}`}
+                  {lag !== null && ` · jeda buffer ${lag.toFixed(1)} dtk`}
+                  {lowLatency && " · latensi rendah"}
+                </span>
+                <button
+                  type="button"
+                  onClick={copyDiagnosis}
+                  className="shrink-0 rounded-md border border-line bg-white/5 px-2 py-1 text-[11px] text-white transition hover:bg-white/10"
+                >
+                  {copied ? "Tersalin ✓" : "Salin diagnosa"}
+                </button>
+              </div>
+            </details>
+          )}
         </>
       )}
 
@@ -805,160 +939,234 @@ export default function LivePlayer({
       ) : (
         <div
           ref={stageRef}
-          className={`relative bg-black ${
-            audioUI ? "" : isFs ? "h-screen w-screen" : effLayout === "mobile" ? "mx-auto aspect-[9/16] max-h-[78vh]" : "aspect-video"
-          }`}
+          onMouseMove={pokeControls}
+          onTouchStart={pokeControls}
+          onMouseLeave={() => playing && !menuOpen && setCtlVisible(false)}
+          // Mobile: lebar mengikuti tinggi (maks 78vh) agar panggung pas dengan videonya, tanpa pita hitam di sisi.
+          style={!isFs && effLayout === "mobile" ? { aspectRatio: String(vidRatio), width: `min(100%, calc(78vh * ${vidRatio}))` } : undefined}
+          className={`group relative bg-black ${isFs ? "h-screen w-screen" : effLayout === "mobile" ? "mx-auto" : "aspect-video"}`}
         >
           {/* Elemen video tetap ada di mode audio agar suara terus diputar */}
           <video
             ref={videoRef}
-            controls={!audioUI}
-            controlsList="nofullscreen"
             autoPlay
             playsInline
-            className={audioUI ? "sr-only" : "h-full w-full bg-black object-contain"}
+            disablePictureInPicture
+            onClick={audioUI ? undefined : togglePlay}
+            className={audioUI ? "sr-only" : "h-full w-full cursor-pointer bg-black object-contain"}
           />
-          {/* Pengaturan di dalam pemutar (gaya TikTok): menu utama + panel kualitas di sampingnya */}
-          {!audioUI && (
-            <div ref={menuRef} className="absolute right-3 top-3 z-20 flex flex-col items-end gap-2">
-              <div className="flex gap-2">
+          {/* Kontrol bawah (menggantikan kontrol bawaan browser, tanpa menu titik tiga) */}
+          {!audioUI && !needsTap && (
+            <div
+              className={`absolute inset-x-0 bottom-0 z-10 flex items-center gap-3 bg-gradient-to-t from-black/75 to-transparent px-4 pb-3 pt-10 transition-opacity duration-200 ${
+                ctlVisible || !playing || menuOpen ? "opacity-100" : "pointer-events-none opacity-0"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={togglePlay}
+                aria-label={playing ? "Jeda" : "Putar"}
+                title={playing ? "Jeda" : "Putar"}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur transition hover:bg-white/30"
+              >
+                {playing ? <FaPause aria-hidden className="h-4 w-4" /> : <FaPlay aria-hidden className="h-4 w-4 translate-x-px" />}
+              </button>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={openMenu}
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
-                  aria-label="Pengaturan video"
-                  title="Pengaturan"
-                  className={`flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur transition hover:bg-black/75 ${menuOpen ? "ring-2 ring-accent-2" : "opacity-80 hover:opacity-100"}`}
+                  onClick={toggleMute}
+                  aria-label={isMuted || vol === 0 ? "Nyalakan suara" : "Matikan suara"}
+                  title={isMuted || vol === 0 ? "Nyalakan suara" : "Matikan suara"}
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-white transition hover:bg-white/20"
                 >
-                  <FaGear aria-hidden className={`h-[18px] w-[18px] transition ${menuOpen ? "rotate-45" : ""}`} />
+                  {isMuted || vol === 0 ? <FaVolumeXmark aria-hidden className="h-[18px] w-[18px]" /> : <FaVolumeHigh aria-hidden className="h-[18px] w-[18px]" />}
                 </button>
-                <button
-                  type="button"
-                  onClick={toggleFullscreen}
-                  aria-label={isFs ? "Keluar layar penuh" : "Layar penuh"}
-                  title={isFs ? "Keluar layar penuh" : "Layar penuh"}
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white opacity-80 backdrop-blur transition hover:bg-black/75 hover:opacity-100"
-                >
-                  {isFs ? <FaCompress aria-hidden className="h-[18px] w-[18px]" /> : <FaExpand aria-hidden className="h-[18px] w-[18px]" />}
-                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={isMuted ? 0 : vol}
+                  onChange={(e) => changeVolume(Number(e.target.value))}
+                  aria-label="Volume"
+                  className="h-1.5 w-20 cursor-pointer accent-[#25f4ee] sm:w-28"
+                />
               </div>
-
-              {menuOpen && (
-                <div className="relative">
-                  <div
-                    role="menu"
-                    aria-label="Pengaturan video"
-                    className="w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-white/10 bg-[#262626]/95 p-2 text-[15px] text-white shadow-2xl backdrop-blur-xl"
-                  >
-                    <MenuRow
-                      icon={FaRotate}
-                      label="Orientasi"
-                      value={effLayout === "wide" ? "Lebar" : "Mobile"}
-                      onClick={() => {
-                        setLayoutUser(effLayout === "wide" ? "mobile" : "wide");
-                        setMenuOpen(false);
-                      }}
-                    />
-                    {qOptions.length > 1 && (
-                      <MenuRow
-                        icon={FaSliders}
-                        label="Kualitas"
-                        value={qNames.get(selected?.id ?? "") ?? "Original"}
-                        chevron
-                        active={menuView === "quality"}
-                        onClick={() => setMenuView((v) => (v === "quality" ? "main" : "quality"))}
-                      />
-                    )}
-                    {plain && (
-                      <MenuRow
-                        icon={FaHeadphones}
-                        label="Audio saja"
-                        onClick={() => {
-                          changeMode("audio");
-                          setMenuOpen(false);
-                        }}
-                      />
-                    )}
-                    <MenuRow
-                      icon={FaBolt}
-                      label="Latensi rendah"
-                      value={lowLatency ? "Aktif" : "Mati"}
-                      valueAccent={lowLatency}
-                      onClick={() => {
-                        toggleLowLatency();
-                        setMenuOpen(false);
-                      }}
-                    />
-                    {lag !== null && lag > 2.5 && (
-                      <MenuRow
-                        icon={FaForwardFast}
-                        label="Ke live"
-                        value={`tertinggal ±${Math.round(lag)} dtk`}
-                        onClick={() => {
-                          goLive();
-                          setMenuOpen(false);
-                        }}
-                      />
-                    )}
-                    {canPip && (
-                      <MenuRow
-                        icon={FaWindowRestore}
-                        label="Picture-in-picture"
-                        onClick={() => {
-                          void togglePip();
-                          setMenuOpen(false);
-                        }}
-                      />
-                    )}
-                  </div>
-
-                  {/* Panel kualitas: di samping menu pada layar lebar, menutupi menu utama pada layar sempit */}
-                  {menuView === "quality" && (
-                    <div
-                      role="radiogroup"
-                      aria-label="Kualitas video"
-                      className="absolute inset-0 z-10 flex flex-col rounded-2xl border border-white/10 bg-[#262626] p-2 text-[15px] text-white shadow-2xl sm:inset-auto sm:right-[calc(100%+0.5rem)] sm:top-0 sm:w-60 sm:bg-[#262626]/95 sm:backdrop-blur-xl"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setMenuView("main")}
-                        className="mb-1 flex w-full items-center gap-2 rounded-xl px-4 py-2.5 text-left text-sm text-white/70 transition hover:bg-white/10 sm:hidden"
-                      >
-                        <FaChevronLeft aria-hidden className="h-3.5 w-3.5" /> Kualitas
-                      </button>
-                      {qOptions.map((q) => {
-                        const name = qNames.get(q.id) ?? q.label;
-                        const active = q.id === selected?.id;
-                        return (
-                          <button
-                            key={q.id}
-                            type="button"
-                            role="radio"
-                            aria-checked={active}
-                            title={q.label}
-                            onClick={() => {
-                              changeQuality(q.id);
-                              setMenuOpen(false);
-                            }}
-                            className={`flex w-full items-center justify-between gap-3 rounded-xl px-5 py-3.5 text-left transition hover:bg-white/10 ${active ? "font-semibold" : "text-white/85"}`}
-                          >
-                            <span>{name}</span>
-                            {active && <FaCheck aria-hidden className="h-4 w-4 text-white" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
+              <button
+                type="button"
+                onClick={goLive}
+                aria-label="Ke tepi live"
+                title="Ke tepi live"
+                className="ml-auto flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-bold tracking-wide text-white transition hover:brightness-110"
+              >
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" /> LIVE
+              </button>
             </div>
           )}
+          {/* Pengaturan di dalam pemutar (gaya TikTok): menu utama + panel kualitas di sampingnya */}
+          <div
+            ref={menuRef}
+            className={`absolute right-4 top-4 z-20 flex flex-col items-end gap-2.5 transition-opacity duration-200 ${
+              audioUI || ctlVisible || !playing || menuOpen ? "opacity-100" : "pointer-events-none opacity-0"
+            }`}
+          >
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={openMenu}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                aria-label="Pengaturan video"
+                title="Pengaturan"
+                className={`flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur transition hover:bg-black/75 ${menuOpen ? "ring-2 ring-accent-2" : "opacity-80 hover:opacity-100"}`}
+              >
+                <FaGear aria-hidden className={`h-[18px] w-[18px] transition ${menuOpen ? "rotate-45" : ""}`} />
+              </button>
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                aria-label={isFs ? "Keluar layar penuh" : "Layar penuh"}
+                title={isFs ? "Keluar layar penuh" : "Layar penuh"}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white opacity-80 backdrop-blur transition hover:bg-black/75 hover:opacity-100"
+              >
+                {isFs ? <FaCompress aria-hidden className="h-[18px] w-[18px]" /> : <FaExpand aria-hidden className="h-[18px] w-[18px]" />}
+              </button>
+            </div>
+
+            {menuOpen && (
+              <div className="relative">
+                <div
+                  role="menu"
+                  aria-label="Pengaturan video"
+                  className="w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-white/10 bg-[#262626]/95 p-2 text-[15px] text-white shadow-2xl backdrop-blur-xl"
+                >
+                  <MenuRow
+                    icon={FaRotate}
+                    label="Orientasi"
+                    value={effLayout === "wide" ? "Lebar" : "Mobile"}
+                    onClick={() => {
+                      setLayoutUser(effLayout === "wide" ? "mobile" : "wide");
+                      setMenuOpen(false);
+                    }}
+                  />
+                  {!audioMode && qOptions.length > 1 && (
+                    <MenuRow
+                      icon={FaSliders}
+                      label="Kualitas"
+                      value={qNames.get(selected?.id ?? "") ?? "Original"}
+                      chevron
+                      active={menuView === "quality"}
+                      onClick={() => setMenuView((v) => (v === "quality" ? "main" : "quality"))}
+                    />
+                  )}
+                  {audioMode && (
+                    <MenuRow
+                      icon={FaVideo}
+                      label="Tampilkan video"
+                      onClick={() => {
+                        changeMode("video");
+                        setMenuOpen(false);
+                      }}
+                    />
+                  )}
+                  {plain && !audioMode && (
+                    <MenuRow
+                      icon={FaHeadphones}
+                      label="Audio saja"
+                      onClick={() => {
+                        changeMode("audio");
+                        setMenuOpen(false);
+                      }}
+                    />
+                  )}
+                  {gifts && (
+                    <MenuRow
+                      icon={FaGift}
+                      label="Gift di layar"
+                      value={giftOverlay ? "Aktif" : "Mati"}
+                      valueAccent={giftOverlay}
+                      onClick={() => {
+                        toggleGiftOverlay();
+                        setMenuOpen(false);
+                      }}
+                    />
+                  )}
+                  <MenuRow
+                    icon={FaBolt}
+                    label="Latensi rendah"
+                    value={lowLatency ? "Aktif" : "Mati"}
+                    valueAccent={lowLatency}
+                    onClick={() => {
+                      toggleLowLatency();
+                      setMenuOpen(false);
+                    }}
+                  />
+                  {lag !== null && lag > 2.5 && (
+                    <MenuRow
+                      icon={FaForwardFast}
+                      label="Ke live"
+                      value={`tertinggal ±${Math.round(lag)} dtk`}
+                      onClick={() => {
+                        goLive();
+                        setMenuOpen(false);
+                      }}
+                    />
+                  )}
+                  {canPip && !audioUI && (
+                    <MenuRow
+                      icon={FaWindowRestore}
+                      label="Picture-in-picture"
+                      onClick={() => {
+                        void togglePip();
+                        setMenuOpen(false);
+                      }}
+                    />
+                  )}
+                </div>
+
+                {/* Panel kualitas: di samping menu pada layar lebar, menutupi menu utama pada layar sempit */}
+                {menuView === "quality" && (
+                  <div
+                    role="radiogroup"
+                    aria-label="Kualitas video"
+                    className="absolute inset-0 z-10 flex flex-col rounded-2xl border border-white/10 bg-[#262626] p-2 text-[15px] text-white shadow-2xl sm:inset-auto sm:right-[calc(100%+0.5rem)] sm:top-0 sm:w-60 sm:bg-[#262626]/95 sm:backdrop-blur-xl"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setMenuView("main")}
+                      className="mb-1 flex w-full items-center gap-2 rounded-xl px-4 py-2.5 text-left text-sm text-white/70 transition hover:bg-white/10 sm:hidden"
+                    >
+                      <FaChevronLeft aria-hidden className="h-3.5 w-3.5" /> Kualitas
+                    </button>
+                    {qOptions.map((q) => {
+                      const name = qNames.get(q.id) ?? q.label;
+                      const active = q.id === selected?.id;
+                      return (
+                        <button
+                          key={q.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          title={q.label}
+                          onClick={() => {
+                            changeQuality(q.id);
+                            setMenuOpen(false);
+                          }}
+                          className={`flex w-full items-center justify-between gap-3 rounded-xl px-5 py-3.5 text-left transition hover:bg-white/10 ${active ? "font-semibold" : "text-white/85"}`}
+                        >
+                          <span>{name}</span>
+                          {active && <FaCheck aria-hidden className="h-4 w-4 text-white" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           {audioUI && (
-            <div className="relative flex flex-col items-center gap-4 overflow-hidden px-6 py-10 text-center">
-              {thumbnail && (
-                <img src={thumbnail} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-20 blur-2xl" />
-              )}
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 overflow-hidden px-6 py-10 text-center">
+              {thumbnail && <img src={thumbnail} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-20 blur-2xl" />}
               <div className="relative flex h-24 w-24 items-center justify-center rounded-full border border-line bg-white/10">
                 {thumbnail ? (
                   <img src={thumbnail} alt="" className="h-full w-full rounded-full object-cover" />
@@ -971,7 +1179,14 @@ export default function LivePlayer({
                   <span
                     key={i}
                     className={`w-1 rounded-full bg-accent-2 ${loading ? "h-1 opacity-40" : "animate-pulse"}`}
-                    style={loading ? undefined : { height: `${10 + ((i * 7) % 14)}px`, animationDelay: `${i * 120}ms` }}
+                    style={
+                      loading
+                        ? undefined
+                        : {
+                            height: `${10 + ((i * 7) % 14)}px`,
+                            animationDelay: `${i * 120}ms`,
+                          }
+                    }
                   />
                 ))}
               </div>
@@ -1024,16 +1239,41 @@ export default function LivePlayer({
                     <FaVideo aria-hidden className="h-3 w-3" /> Tampilkan video
                   </button>
                 )}
-                {lag !== null && lag > 2.5 && (
-                  <button
-                    type="button"
-                    onClick={goLive}
-                    className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/20"
-                  >
-                    Ke live · tertinggal ±{Math.round(lag)} dtk
-                  </button>
-                )}
               </div>
+            </div>
+          )}
+          {giftOverlay && giftPopups.length > 0 && (
+            <div
+              aria-live="polite"
+              className={`pointer-events-none absolute left-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2 ${audioUI ? "bottom-3" : "bottom-16"}`}
+            >
+              {giftPopups.map((g) => (
+                <div key={g.id} className="flex items-center gap-2 rounded-full bg-black/60 py-1 pl-1 pr-3 text-sm text-white shadow-lg backdrop-blur">
+                  {g.avatar ? (
+                    <img src={g.avatar} alt="" referrerPolicy="no-referrer" className="h-8 w-8 rounded-full object-cover" />
+                  ) : (
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/15">
+                      <FaGift aria-hidden className="h-4 w-4 text-amber-300" />
+                    </span>
+                  )}
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5 text-xs font-semibold leading-tight">
+                      <span className="max-w-[8rem] truncate">{g.user ?? "Seseorang"}</span>
+                      {!!g.level && g.level > 0 && (
+                        <span
+                          title={`Level gifter ${g.level}`}
+                          className={`shrink-0 rounded px-1 py-px text-[10px] font-bold leading-none ${g.level >= 40 ? "bg-rose-500" : g.level >= 20 ? "bg-violet-500" : "bg-sky-600"}`}
+                        >
+                          Lv {g.level}
+                        </span>
+                      )}
+                    </span>
+                    <span className="block max-w-[10rem] truncate text-[11px] leading-tight text-amber-200">{g.gift}</span>
+                  </span>
+                  {g.icon && <img src={g.icon} alt="" referrerPolicy="no-referrer" className="h-8 w-8 object-contain" />}
+                  <span className="text-base font-bold text-amber-300">×{g.count ?? 1}</span>
+                </div>
+              ))}
             </div>
           )}
           {needsTap && (

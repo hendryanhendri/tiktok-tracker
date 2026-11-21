@@ -103,6 +103,7 @@ export default function HomeApp() {
         /* abaikan */
       }
       setBookmarkSeen(true);
+      tiktokWinRef.current?.close(); // video sudah diterima: tab TikTok tidak diperlukan lagi
       const cur = streamRef.current;
       if (cur?.tracking && (!data.username || cur.username?.toLowerCase() === data.username.toLowerCase())) {
         // Sesi sudah berjalan (sedang menunggu video): pasang video tanpa memutus komentar/gift.
@@ -331,7 +332,7 @@ export default function HomeApp() {
             <div className={stream.tracking && !plain ? "min-w-0" : ""}>
             {stream.qualities.length > 0 ? (
               <div className={stream.tracking && !plain ? "w-full" : plain ? "mx-auto w-full max-w-4xl" : "mx-auto w-full max-w-3xl"}>
-                <LivePlayer key={stream.vkey ?? 0} qualities={stream.qualities} username={stream.username} thumbnail={stream.cover} plain={plain} />
+                <LivePlayer key={stream.vkey ?? 0} qualities={stream.qualities} username={stream.username} thumbnail={stream.cover} plain={plain} gifts={stream.tracking && !plain ? tracker.gifts : undefined} />
               </div>
             ) : (
               <div className="mx-auto w-full max-w-3xl rounded-2xl border border-line bg-surface px-6 py-8 text-center backdrop-blur-md">
