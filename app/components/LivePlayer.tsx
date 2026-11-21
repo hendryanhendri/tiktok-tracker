@@ -219,6 +219,12 @@ export default function LivePlayer({
       /* abaikan */
     }
   };
+  // Bingkai terakhir video, ditahan di bawah indikator memuat saat kualitas diganti (tanpa kilat hitam).
+  const [freeze, setFreeze] = useState<string | null>(null);
+  // HLS dengan beberapa tingkat di satu daftar (master playlist): pilihan kualitas diambil dari daftar itu (mis. Shopee).
+  const hlsRef = useRef<Hls | null>(null);
+  const [hlsLevels, setHlsLevels] = useState<{ i: number; h: number; kbps: number }[]>([]);
+  const [levelSel, setLevelSel] = useState(-1); // -1 = otomatis
   const [giftOverlay, setGiftOverlay] = useState(() => {
     try {
       return localStorage.getItem("tt-giftov") !== "0";
@@ -364,7 +370,10 @@ export default function LivePlayer({
     setFailReason(null);
     setNeedsTap(false);
     setAutoMuted(false);
-    setDims(null);
+    hlsRef.current = null;
+    setHlsLevels([]);
+    setLevelSel(-1);
+    // dims sengaja TIDAK di-reset: ukuran gambar lama dipertahankan sampai yang baru diketahui, agar bentuk kartu/layout tidak melompat saat kualitas diganti.
     mediaInfoRef.current = {};
     statsRef.current = { waiting: 0, stalled: 0, errors: [] };
     log(`mulai: varian ${variant + 1}/${candidates.length} ${useProxy ? "via proxy" : "langsung"} (${isFlv(src) ? "FLV" : "HLS"})`);
@@ -374,6 +383,7 @@ export default function LivePlayer({
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const failAll = (reason: string) => {
+      setFreeze(null);
       setFailReason(reason || null);
       setFailed(true);
     };
@@ -398,6 +408,7 @@ export default function LivePlayer({
     const onReady = () => {
       if (timer) clearTimeout(timer);
       setLoading(false);
+      setFreeze(null);
     };
     ["playing", "loadeddata", "canplay"].forEach((ev) => video.addEventListener(ev, onReady));
     // Suara jalan tapi gambar tidak ada (mis. codec HEVC tak didukung) -> coba varian lain.
@@ -561,9 +572,11 @@ export default function LivePlayer({
         );
         let hlsRetries = 0;
         video.addEventListener("playing", () => (hlsRetries = 0));
+        hlsRef.current = hls;
         hls.loadSource(src);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
+          setHlsLevels(data.levels.map((l, i) => ({ i, h: l.height || 0, kbps: Math.round(l.bitrate / 1000) })));
           mediaInfoRef.current = {
             ...mediaInfoRef.current,
             kind: "hls",
@@ -600,7 +613,10 @@ export default function LivePlayer({
             hls.recoverMediaError();
           } else fail(`HLS error: ${data.details}`);
         });
-        destroy = () => hls.destroy();
+        destroy = () => {
+          hls.destroy();
+          if (hlsRef.current === hls) hlsRef.current = null;
+        };
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = src;
         const onErr = () => fail("Video gagal dimuat.");
@@ -906,6 +922,7 @@ export default function LivePlayer({
       else if (n - base.n >= 3 && autoIdx < qOptions.length - 1) {
         log(`Auto: tersendat ${n - base.n}x, turun ke kualitas lebih rendah`);
         autoBaseRef.current = { n, t: Date.now() };
+        captureFrame();
         setAutoIdx(autoIdx + 1);
       }
     }, 5000);
@@ -957,11 +974,31 @@ export default function LivePlayer({
     setVariant(0);
     setUseProxy(false);
   };
+  const captureFrame = () => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth || v.paused) return setFreeze(null);
+    try {
+      const c = document.createElement("canvas");
+      c.width = Math.min(v.videoWidth, 720);
+      c.height = Math.round((c.width * v.videoHeight) / v.videoWidth);
+      c.getContext("2d")?.drawImage(v, 0, 0, c.width, c.height);
+      setFreeze(c.toDataURL("image/jpeg", 0.6));
+    } catch {
+      setFreeze(null); // canvas "tercemar" (sumber lintas-asal): tanpa bingkai beku
+    }
+  };
+  const pickLevel = (i: number) => {
+    const h = hlsRef.current;
+    if (!h) return;
+    h.currentLevel = i; // pindah tingkat di dalam pemutar yang sama (tanpa memuat ulang kartu)
+    setLevelSel(i);
+  };
   const showQualityHint = () => {
     setRecMsg("Live ini hanya memberi satu pilihan kualitas. Kalau seharusnya ada lebih, buka live-nya lagi lalu klik bookmark, atau mulai Track ulang.");
     setMenuOpen(false);
   };
   const chooseAuto = () => {
+    captureFrame();
     giveUpVideoRef.current = false;
     setNoVideo(false);
     setIsAuto(true);
@@ -970,6 +1007,7 @@ export default function LivePlayer({
     setUseProxy(false);
   };
   const changeQuality = (id: string) => {
+    if (id !== selected?.id || isAuto) captureFrame(); // hanya bila benar-benar berganti sumber
     giveUpVideoRef.current = false;
     setNoVideo(false);
     setIsAuto(false);
@@ -1009,6 +1047,28 @@ export default function LivePlayer({
         }
       : undefined;
   const audioUI = audioMode || noVideoUi; // tampilan panel audio (dipilih pengguna, atau stream memang tanpa gambar)
+
+  // Daftar pilihan kualitas di menu: (a) tingkat TikTok-style bila live memberi beberapa alamat, atau (b) tingkat di dalam satu daftar HLS.
+  const levelMode = qOptions.length <= 1 && hlsLevels.length > 1;
+  const sortedLevels = [...hlsLevels].sort((a, b) => b.h - a.h || b.kbps - a.kbps);
+  const levelName = (l: { h: number; kbps: number }) => {
+    const dup = hlsLevels.filter((x) => x.h === l.h).length > 1;
+    return l.h ? (dup ? `${l.h}p · ${l.kbps} kbps` : `${l.h}p`) : `${l.kbps} kbps`;
+  };
+  const qItems: { key: string; name: string; active: boolean; pick: () => void }[] = levelMode
+    ? [
+        { key: "auto", name: "Auto", active: levelSel === -1, pick: () => pickLevel(-1) },
+        ...sortedLevels.map((l) => ({ key: `lv${l.i}`, name: levelName(l), active: levelSel === l.i, pick: () => pickLevel(l.i) })),
+      ]
+    : [
+        {
+          key: "auto",
+          name: `Auto (${qNames.get(qOptions[Math.min(isAuto ? autoIdx : autoStart, qOptions.length - 1)]?.id ?? "") ?? "Original"})`,
+          active: isAuto,
+          pick: chooseAuto,
+        },
+        ...qOptions.map((q) => ({ key: q.id, name: qNames.get(q.id) ?? q.label, active: !isAuto && q.id === selected?.id, pick: () => changeQuality(q.id) })),
+      ];
 
   return (
     <div
@@ -1272,11 +1332,17 @@ export default function LivePlayer({
                     }}
                   />
                   {!audioMode &&
-                    (qOptions.length > 1 ? (
+                    (qOptions.length > 1 || levelMode ? (
                       <MenuRow
                         icon={FaSliders}
                         label="Kualitas"
-                        value={isAuto ? `Auto (${qNames.get(selected?.id ?? "") ?? "Original"})` : (qNames.get(selected?.id ?? "") ?? "Original")}
+                        value={
+                          levelMode
+                            ? (qItems.find((it) => it.active)?.name ?? "Auto")
+                            : isAuto
+                              ? `Auto (${qNames.get(selected?.id ?? "") ?? "Original"})`
+                              : (qNames.get(selected?.id ?? "") ?? "Original")
+                        }
                         chevron
                         active={menuView === "quality"}
                         onClick={() => setMenuView((v) => (v === "quality" ? "main" : "quality"))}
@@ -1408,40 +1474,22 @@ export default function LivePlayer({
                     >
                       <FaChevronLeft aria-hidden className="h-3.5 w-3.5" /> Kualitas
                     </button>
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={isAuto}
-                      onClick={() => {
-                        chooseAuto();
-                        setMenuOpen(false);
-                      }}
-                      className={`flex w-full items-center justify-between gap-3 rounded-xl px-5 py-3.5 text-left transition hover:bg-white/10 ${isAuto ? "font-semibold" : "text-white/85"}`}
-                    >
-                      <span>Auto ({qNames.get(qOptions[Math.min(isAuto ? autoIdx : autoStart, qOptions.length - 1)]?.id ?? "") ?? "Original"})</span>
-                      {isAuto && <FaCheck aria-hidden className="h-4 w-4 text-white" />}
-                    </button>
-                    {qOptions.map((q) => {
-                      const name = qNames.get(q.id) ?? q.label;
-                      const active = !isAuto && q.id === selected?.id;
-                      return (
-                        <button
-                          key={q.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={active}
-                          title={q.label}
-                          onClick={() => {
-                            changeQuality(q.id);
-                            setMenuOpen(false);
-                          }}
-                          className={`flex w-full items-center justify-between gap-3 rounded-xl px-5 py-3.5 text-left transition hover:bg-white/10 ${active ? "font-semibold" : "text-white/85"}`}
-                        >
-                          <span>{name}</span>
-                          {active && <FaCheck aria-hidden className="h-4 w-4 text-white" />}
-                        </button>
-                      );
-                    })}
+                    {qItems.map((it) => (
+                      <button
+                        key={it.key}
+                        type="button"
+                        role="radio"
+                        aria-checked={it.active}
+                        onClick={() => {
+                          it.pick();
+                          setMenuOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between gap-3 rounded-xl px-5 py-3.5 text-left transition hover:bg-white/10 ${it.active ? "font-semibold" : "text-white/85"}`}
+                      >
+                        <span>{it.name}</span>
+                        {it.active && <FaCheck aria-hidden className="h-4 w-4 text-white" />}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1680,9 +1728,13 @@ export default function LivePlayer({
               🔇 Suara mati · klik untuk menyalakan
             </button>
           )}
+          {freeze && loading && !audioUI && (
+            <img alt="bingkai terakhir" src={freeze} className="pointer-events-none absolute inset-0 z-[1] h-full w-full bg-black object-contain" />
+          )}
           {loading && !audioUI && !needsTap && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className={`pointer-events-none absolute inset-0 z-[2] flex flex-col items-center justify-center gap-2 ${freeze ? "bg-black/30" : ""}`}>
               <span className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              {freeze && <span className="rounded-full bg-black/60 px-3 py-1 text-xs font-medium text-white">Mengganti kualitas…</span>}
             </div>
           )}
         </div>
