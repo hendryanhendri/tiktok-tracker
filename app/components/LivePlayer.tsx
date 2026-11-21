@@ -642,6 +642,7 @@ export default function LivePlayer({
       `browser: ${navigator.userAgent}`,
       `dukungan MSE: H264=${sup('video/mp4; codecs="avc1.64001f"')} HEVC=${sup('video/mp4; codecs="hvc1.1.6.L93.B0"')} AAC=${sup('audio/mp4; codecs="mp4a.40.2"')}`,
       `mode: ${mode} | kualitas: ${selected?.label} | tanpaGambar=${noVideo}`,
+      `kualitas tersedia (${qualities.length}): ${qualities.map((q) => `${q.label}[${1 + (q.alts?.length ?? 0)} url]`).join(", ") || "-"}`,
       `varian: ${variant + 1}/${candidates.length} | via proxy: ${useProxy}`,
       ...candidates.map(
         (u, i) => `  ${i === variant ? ">" : " "} ${i + 1}. ${isFlv(u) ? "FLV" : "HLS"} ${new URL(u).host}/…/${u.split("?")[0].split("/").pop()}`,
@@ -956,6 +957,10 @@ export default function LivePlayer({
     setVariant(0);
     setUseProxy(false);
   };
+  const showQualityHint = () => {
+    setRecMsg("Live ini hanya memberi satu pilihan kualitas. Kalau seharusnya ada lebih, buka live-nya lagi lalu klik bookmark, atau mulai Track ulang.");
+    setMenuOpen(false);
+  };
   const chooseAuto = () => {
     giveUpVideoRef.current = false;
     setNoVideo(false);
@@ -1266,16 +1271,25 @@ export default function LivePlayer({
                       setMenuOpen(false);
                     }}
                   />
-                  {!audioMode && qOptions.length > 1 && (
-                    <MenuRow
-                      icon={FaSliders}
-                      label="Kualitas"
-                      value={isAuto ? `Auto (${qNames.get(selected?.id ?? "") ?? "Original"})` : (qNames.get(selected?.id ?? "") ?? "Original")}
-                      chevron
-                      active={menuView === "quality"}
-                      onClick={() => setMenuView((v) => (v === "quality" ? "main" : "quality"))}
-                    />
-                  )}
+                  {!audioMode &&
+                    (qOptions.length > 1 ? (
+                      <MenuRow
+                        icon={FaSliders}
+                        label="Kualitas"
+                        value={isAuto ? `Auto (${qNames.get(selected?.id ?? "") ?? "Original"})` : (qNames.get(selected?.id ?? "") ?? "Original")}
+                        chevron
+                        active={menuView === "quality"}
+                        onClick={() => setMenuView((v) => (v === "quality" ? "main" : "quality"))}
+                      />
+                    ) : (
+                      // Live hanya memberi satu kualitas (data dari TikTok/bookmark): tetap ditampilkan agar jelas, bukan hilang karena galat.
+                      <MenuRow
+                        icon={FaSliders}
+                        label="Kualitas"
+                        value={`${qNames.get(selected?.id ?? "") ?? "Original"} · hanya 1 pilihan`}
+                        onClick={() => showQualityHint()}
+                      />
+                    ))}
                   {audioMode && (
                     <MenuRow
                       icon={FaVideo}

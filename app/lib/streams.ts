@@ -164,7 +164,7 @@ export function collectStreams(root: unknown): { urls: string[]; meta: Record<st
  * Dijalankan di halaman live TikTok (di browser Anda sendiri): mengumpulkan URL .m3u8/.flv dari
  * request jaringan + isi halaman, lalu membuka aplikasi ini dengan hasilnya di hash (#s=...).
  */
-const BOOKMARKLET = String.raw`(async function (origin) {
+const BOOKMARKLET = String.raw`(async function (origin, appPath) {
   const found = {};
   const apiFound = {};
   let cur = found;
@@ -259,11 +259,12 @@ const BOOKMARKLET = String.raw`(async function (origin) {
   } catch (e) {}
   // 2) Cadangan: buka aplikasi di tab baru dengan data di alamatnya.
   const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
-  const link = origin + "/#s=" + encodeURIComponent(b64);
+  const link = origin + (appPath || "/") + "#s=" + encodeURIComponent(b64);
   const w = window.open(link, "_blank");
   if (!w) prompt("Popup diblokir browser. Salin alamat ini lalu buka di tab baru:", link);
   else setTimeout(() => { try { window.close(); } catch (e) {} }, 500); // hanya berhasil bila tab ini dibuka lewat skrip; selain itu diabaikan browser
 })`;
 
-export const bookmarkletHref = (origin: string) =>
-  "javascript:" + encodeURIComponent(BOOKMARKLET + "(" + JSON.stringify(origin) + ")");
+/** appPath: halaman aplikasi tujuan bila tab baru perlu dibuka (bawaan "/"; Shopee memakai "/shopee"). */
+export const bookmarkletHref = (origin: string, appPath = "") =>
+  "javascript:" + encodeURIComponent(BOOKMARKLET + "(" + JSON.stringify(origin) + "," + JSON.stringify(appPath) + ")");

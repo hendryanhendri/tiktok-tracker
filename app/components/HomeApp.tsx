@@ -5,7 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FaStop, FaBookmark, FaMagnifyingGlass, FaArrowUpRightFromSquare, FaArrowUp } from "react-icons/fa6";
+import { FaStop, FaMagnifyingGlass, FaArrowUpRightFromSquare } from "react-icons/fa6";
+import BookmarkletLink from "@/app/components/BookmarkletLink";
 import Toast from "@/app/components/Toast";
 import LiveStats from "@/app/components/LiveStats";
 import SidePanels from "@/app/components/SidePanels";
@@ -23,29 +24,6 @@ const LivePlayer = dynamic(() => import("@/app/components/LivePlayer"), {
 type Stream = { username?: string; qualities: Quality[]; title?: string | null; cover?: string | null; tracking: boolean; key: number; vkey?: number; ended?: boolean };
 
 const cleanUsername = (v: string) => v.trim().replace(/^@/, "");
-
-// React memblokir href "javascript:" di JSX, jadi href dipasang lewat ref.
-function BookmarkletLink({ onBlocked }: { onBlocked: () => void }) {
-  const ref = useRef<HTMLAnchorElement>(null);
-  useEffect(() => {
-    ref.current?.setAttribute("href", bookmarkletHref(window.location.origin));
-  }, []);
-  return (
-    <a
-      ref={ref}
-      draggable
-      title="Klik dan tahan, lalu lepas di bookmark bar"
-      onClick={(e) => {
-        e.preventDefault();
-        onBlocked();
-      }}
-      className="nudge-up inline-flex cursor-grab items-center gap-2 rounded-xl border border-dashed border-accent bg-gradient-to-r from-accent/20 to-accent-2/15 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-accent/10 transition hover:brightness-125 hover:animate-none active:animate-none active:cursor-grabbing"
-    >
-      <FaBookmark aria-hidden className="h-3.5 w-3.5 text-accent" /> 🎬 TikTok Live
-      <FaArrowUp aria-hidden className="h-3 w-3 text-accent-2" />
-    </a>
-  );
-}
 
 /**
  * Halaman utama yang selalu terpasang di layout (hanya disembunyikan di halaman lain), supaya koneksi, komentar,
@@ -120,6 +98,7 @@ export default function HomeApp() {
 
   useEffect(() => {
     const load = () => {
+      if (window.location.pathname === "/shopee") return; // kiriman bookmark Shopee ditangani ShopeeApp
       const data = decodeHash(window.location.hash);
       if (!data) return;
       history.replaceState(null, "", window.location.pathname);

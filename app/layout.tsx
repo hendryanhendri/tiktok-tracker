@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import HomeApp from "./components/HomeApp";
+import ShopeeApp from "./components/ShopeeApp";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -39,6 +40,7 @@ export default function RootLayout({
         <Navbar />
         <main className="flex-1 pt-20">
           <HomeApp />
+          <ShopeeApp />
           {children}
         </main>
         <Footer />
