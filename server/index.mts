@@ -64,7 +64,10 @@ const setStatus = (status: string) => {
   currentStatus = status;
   broadcast({ type: "status", status });
 };
-wss.on("connection", (ws) => ws.send(JSON.stringify({ type: "status", status: currentStatus })));
+wss.on("connection", (ws) => {
+  ws.send(JSON.stringify({ type: "status", status: currentStatus }));
+  if (currentGoals.length) ws.send(JSON.stringify({ type: "goal", goals: currentGoals }));
+});
 
 /* ---------- Sesi komentar/gift ---------- */
 type Tally = { name: string; count: number; totalCoin: number };
@@ -88,6 +91,69 @@ const imgUrl = (x: any): string | undefined => {
   if (Array.isArray(x.url)) return x.url.find((u: unknown) => typeof u === "string");
   return undefined;
 };
+/* ---------- Contoh event challenge/target/battle (untuk membangun tampilannya) ---------- */
+// Event ini hanya muncul di live yang sedang punya target gift (goal), battle, atau polling. Bentuk datanya tidak terdokumentasi,
+// jadi 2 contoh pertama tiap jenis disimpan ke .event-samples.json (lokal, tidak masuk git; avatar/lencana dibuang).
+const SAMPLE_FILE = ".event-samples.json";
+const SAMPLE_EVENTS = ["goalUpdate", "linkMicBattle", "linkMicArmies", "linkMicBattleTask", "linkMicBattleItemCard", "pollMessage", "rankUpdate", "hourlyRank", "giftBroadcast", "giftPrompt", "giftPanelUpdate", "roomPin"];
+const samples: Record<string, any[]> = (() => {
+  try {
+    return JSON.parse(readFileSync(SAMPLE_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+})();
+const slim = (v: any, depth = 0): any => {
+  if (v == null || depth > 7) return v == null ? v : "…";
+  if (typeof v === "bigint") return String(v);
+  if (typeof v === "string") return v.length > 160 ? `${v.slice(0, 160)}…` : v;
+  if (Array.isArray(v)) return v.slice(0, 5).map((x) => slim(x, depth + 1));
+  if (typeof v === "object")
+    return Object.fromEntries(
+      Object.entries(v)
+        .filter(([k]) => !/deprecated|avatar|badge|border|medal|fansClub|followInfo|realTime|secUid|bio|createTime|modifyTime|signature|payGrade|shareQrcode|userAttr|stats|topFans|upcoming/i.test(k))
+        .map(([k, x]) => [k, slim(x, depth + 1)]),
+    );
+  return v;
+};
+function captureSample(name: string, d: any) {
+  const list = (samples[name] ??= []);
+  if (list.length >= 2) return;
+  list.push({ at: new Date().toISOString(), data: slim(d) });
+  try {
+    writeFileSync(SAMPLE_FILE, JSON.stringify(samples, null, 1).slice(0, 400_000));
+    console.log(`[event-sample] "${name}" disimpan di ${SAMPLE_FILE} (${list.length}/2)`);
+  } catch {
+    /* abaikan */
+  }
+}
+
+/* ---------- Target / challenge gift (goal) ---------- */
+// TikTok mengirim kondisi target gift lewat event "giftPanelUpdate": goalData.goalProgress = { <idGift>: { currentProgress, target, expiredTimestampInMs } }.
+// Target yang batas waktunya sudah lewat (masih ikut terkirim) dibuang. Nilai waktu dari TikTok bisa detik atau milidetik.
+type Goal = { giftId: number; current: number; target: number; expiresAt: number | null; name?: string; icon?: string };
+let currentGoals: Goal[] = [];
+function extractGoals(d: any): Goal[] {
+  const progress = d?.goalData?.goalProgress ?? {};
+  const now = Date.now();
+  const out: Goal[] = [];
+  for (const [id, g] of Object.entries<any>(progress)) {
+    const target = Number(g?.target) || 0;
+    const current = Number(g?.currentProgress) || 0;
+    let exp = Number(g?.expiredTimestampInMs) || 0;
+    if (exp && exp < 1e11) exp *= 1000; // detik -> milidetik
+    if (!target || (exp && exp <= now)) continue;
+    const info = GIFT_CATALOG[Number(id)] ?? learned.get(Number(id));
+    out.push({ giftId: Number(id), current, target, expiresAt: exp || null, name: info?.name, icon: info?.icon });
+  }
+  return out;
+}
+function setGoals(goals: Goal[]) {
+  if (JSON.stringify(goals) === JSON.stringify(currentGoals)) return;
+  currentGoals = goals;
+  broadcast({ type: "goal", goals });
+}
+
 /* ---------- Info gift ---------- */
 // Event gift sering tanpa nama/gambar/harga. Sumber, urut prioritas: detail di event -> katalog bawaan (utils/giftCatalog.ts)
 // -> gift yang pernah eventnya lengkap (diingat di memori + .gift-cache.json).
@@ -202,8 +268,15 @@ async function startSession(username: string): Promise<Session> {
         broadcast({ type: "viewer", viewerCount, totalViews: num(d.totalUser) ?? 0 });
       }
     });
+    for (const ev of SAMPLE_EVENTS) connection.on(ev as any, (d: any) => captureSample(ev, d));
+    connection.on("giftPanelUpdate" as any, (d: any) => {
+      if (isActive()) setGoals(extractGoals(d));
+    });
     connection.on(WebcastEvent.STREAM_END, () => {
-      if (isActive()) setStatus("ended");
+      if (isActive()) {
+        setStatus("ended");
+        setGoals([]);
+      }
     });
     connection.on(ControlEvent.DISCONNECTED, () => {
       if (!isActive() || currentStatus === "ended") return;
@@ -368,6 +441,7 @@ http
 
         if (activeUser && activeUser !== name) await stopSession(activeUser);
         activeUser = name;
+        setGoals([]); // target dari streamer sebelumnya tidak boleh terbawa
         setStatus("connecting");
         // Video tidak boleh gagal hanya karena komentar/gift (Euler) bermasalah.
         let chat: { ok: boolean; error?: string } = { ok: true };
@@ -402,6 +476,7 @@ http
       if (req.method === "POST" && route === "stop_tracking") {
         if (activeUser) await stopSession(activeUser);
         activeUser = null;
+        setGoals([]);
         setStatus("offline");
         return send(res, 200, { ok: true });
       }

@@ -3,6 +3,10 @@
 Tonton live TikTok dengan pilihan kualitas (rendah → tinggi), mode audio, tampilan mobile/lebar, fullscreen,
 Picture-in-Picture, plus komentar, gift, dan viewer. Frontend Next.js + backend Node kecil. Tanpa Python.
 
+**Rekam video/audio:** bawaannya **Unduh di akhir** (disimpan di memori sampai maksimal 500 MB, lalu diunduh; jalan di semua browser, termasuk Brave).
+Untuk rekaman panjang di Chrome/Edge, pilih **Simpan rekaman → Langsung ke disk** di menu pengaturan (gear); Chrome akan menampilkan dialog simpan dan izin tulis.
+**Target (challenge) gift** yang sedang aktif di live tampil sebagai bar progres di pojok kiri atas video (ikut tombol "Gift di layar").
+
 ## Menjalankan di Windows (satu klik)
 
 Download/clone project, lalu **klik dua kali `Start-Tracker.bat`**. Pertama kali, skrip otomatis

@@ -365,7 +365,7 @@ export default function HomeApp() {
               <div className={stream.tracking && !plain ? (playerLayout === "mobile" ? "w-max max-w-full" : "w-full") : plain ? "mx-auto w-full" : "mx-auto w-full max-w-3xl"}
                 style={plain ? { maxWidth: "calc((100dvh - 6.5rem) * 16 / 9)" } : undefined}
               >
-                <LivePlayer key={stream.vkey ?? 0} qualities={stream.qualities} username={stream.username} thumbnail={stream.cover} plain={plain} onLayoutChange={setPlayerLayout} onClose={plain ? handleClose : undefined} ended={!!stream.ended} gifts={stream.tracking && !plain ? tracker.gifts : undefined} />
+                <LivePlayer key={stream.vkey ?? 0} qualities={stream.qualities} username={stream.username} thumbnail={stream.cover} plain={plain} onLayoutChange={setPlayerLayout} onClose={plain ? handleClose : undefined} ended={!!stream.ended} gifts={stream.tracking && !plain ? tracker.gifts : undefined} goals={stream.tracking && !plain ? tracker.goals : undefined} />
               </div>
             ) : (
               <div className="mx-auto w-full max-w-3xl rounded-2xl border border-line bg-surface px-6 py-8 text-center backdrop-blur-md">

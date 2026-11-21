@@ -26,6 +26,7 @@ import {
   FaStop,
   FaGift,
   FaVideoSlash,
+  FaFloppyDisk,
 } from "react-icons/fa6";
 import type { IconType } from "react-icons";
 import { API_URL } from "@/app/lib/config";
@@ -99,6 +100,15 @@ function MenuRow({
 }
 
 type GiftEvent = { key?: string; coins?: number; id: number; user?: string; gift?: string; count?: number; icon?: string; avatar?: string; level?: number };
+/** Target/challenge gift yang sedang aktif di live (dari server). */
+type GoalItem = { giftId: number; current: number; target: number; expiresAt: number | null; name?: string; icon?: string };
+const mmss = (ms: number) => {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = t % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+};
 const GIFT_POPUP_MS = 6000;
 const BIG_GIFT_COINS = 1000; // gift senilai >= ini memicu efek besar; >= 10.000 efek lebih lama (mega)
 const GIFT_SIZE = "clamp(18px, 7cqw, 28px)"; // ukuran avatar/gambar gift, mengikuti lebar gambar video
@@ -125,6 +135,7 @@ export default function LivePlayer({
   initialMode = "video",
   plain = false,
   gifts,
+  goals,
   ended = false,
   onClose,
   onLayoutChange,
@@ -137,6 +148,8 @@ export default function LivePlayer({
   plain?: boolean;
   /** Daftar gift dari tracker (bila ada): ditampilkan sebagai notifikasi di atas video. */
   gifts?: GiftEvent[];
+  /** Target/challenge gift aktif: ditampilkan sebagai bar progres di pojok kiri atas video. */
+  goals?: GoalItem[];
   /** Live sudah berakhir (kabar dari server): pemutar dihentikan dan layar "Live telah berakhir" ditampilkan. */
   ended?: boolean;
   /** Tampilan polos: tombol Tutup di dalam pemutar (pojok kiri atas), karena form di atas disembunyikan. */
@@ -178,6 +191,34 @@ export default function LivePlayer({
     }
   });
   // Notifikasi gift di layar: hanya gift yang masuk setelah pemutar dibuka (riwayat lama tidak diputar ulang).
+  // Target gift: hitung mundur tiap detik selama ada target; yang waktunya habis disembunyikan.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const hasGoals = !!goals?.length;
+  useEffect(() => {
+    if (!hasGoals) return;
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [hasGoals]);
+  const activeGoals = (goals ?? []).filter((g) => !g.expiresAt || g.expiresAt > nowMs).slice(0, 3);
+
+  // Cara menyimpan rekaman: "download" = unduhan biasa di akhir (jalan di semua browser, termasuk Brave);
+  // "disk" = tulis langsung ke disk lewat dialog simpan (hanya Chrome/Edge, aman untuk rekaman panjang, tapi Chrome menampilkan dialog izin).
+  const [recMode, setRecMode] = useState<"download" | "disk">(() => {
+    try {
+      return localStorage.getItem("tt-recmode") === "disk" ? "disk" : "download";
+    } catch {
+      return "download";
+    }
+  });
+  const toggleRecMode = () => {
+    const next = recMode === "disk" ? "download" : "disk";
+    setRecMode(next);
+    try {
+      localStorage.setItem("tt-recmode", next);
+    } catch {
+      /* abaikan */
+    }
+  };
   const [giftOverlay, setGiftOverlay] = useState(() => {
     try {
       return localStorage.getItem("tt-giftov") !== "0";
@@ -669,15 +710,15 @@ export default function LivePlayer({
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const filename = `tiktok_${username ?? "live"}_${stamp}_${kind}.${ext}`;
 
-    // Chrome/Edge: tulis langsung ke disk (aman untuk rekaman panjang). Lainnya: simpan di memori (dibatasi).
-    // Harus dipanggil langsung dari klik pengguna, sebelum await lain.
+    // Mode "disk" (Chrome/Edge): tulis langsung ke disk, aman untuk rekaman panjang. Mode "download" (bawaan): simpan di memori
+    // (dibatasi 500 MB) lalu diunduh. Dialog simpan harus dipanggil langsung dari klik pengguna, sebelum await lain.
     let writable: FileSystemWritableFileStream | null = null;
     const picker = (
       window as unknown as {
         showSaveFilePicker?: (o: unknown) => Promise<FileSystemFileHandle>;
       }
     ).showSaveFilePicker;
-    if (picker) {
+    if (picker && recMode === "disk") {
       try {
         const handle = await picker({
           suggestedName: filename,
@@ -690,8 +731,8 @@ export default function LivePlayer({
         });
         writable = await handle.createWritable();
       } catch (e) {
-        if ((e as Error).name === "AbortError") return; // pengguna membatalkan dialog simpan
-        writable = null;
+        if ((e as Error).name === "AbortError") return setRecMsg("Dialog simpan dibatalkan, rekaman tidak dimulai. Pilih lokasi simpan, atau ganti ke 'Unduh di akhir' di menu pengaturan.");
+        writable = null; // izin ditolak / tidak didukung: lanjut dengan unduhan biasa
       }
     }
 
@@ -740,9 +781,12 @@ export default function LivePlayer({
           const a = document.createElement("a");
           a.href = url;
           a.download = filename;
+          a.style.display = "none";
+          document.body.appendChild(a); // lebih kompatibel di berbagai browser daripada anchor yang tidak terpasang
           a.click();
-          setTimeout(() => URL.revokeObjectURL(url), 10_000);
-          setRecMsg(`Diunduh: ${filename} (${fmtBytes(recBytesRef.current)})`);
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 120_000); // beri waktu browser mengambil file besar sebelum alamatnya dicabut
+          setRecMsg(`Diunduh: ${filename} (${fmtBytes(recBytesRef.current)}). Bila browser menolak, cek ikon unduhan, atau pakai mode 'Langsung ke disk'.`);
         } else setRecMsg("Tidak ada data yang terekam.");
       } catch (err) {
         setRecMsg(`Gagal menyimpan rekaman: ${(err as Error).message}`);
@@ -1285,6 +1329,18 @@ export default function LivePlayer({
                       }}
                     />
                   )}
+                  {!plain && (
+                    <MenuRow
+                      icon={FaFloppyDisk}
+                      label="Simpan rekaman"
+                      value={recMode === "disk" ? "Langsung ke disk" : "Unduh di akhir"}
+                      valueAccent={recMode === "disk"}
+                      onClick={() => {
+                        toggleRecMode();
+                        setMenuOpen(false);
+                      }}
+                    />
+                  )}
                   <MenuRow
                     icon={FaBolt}
                     label="Latensi rendah"
@@ -1455,7 +1511,7 @@ export default function LivePlayer({
               </div>
             </div>
           )}
-          {giftOverlay && (giftPopups.length > 0 || bigGift) && (
+          {giftOverlay && (giftPopups.length > 0 || bigGift || activeGoals.length > 0) && (
             // Area notifikasi mengikuti posisi asli gambar video (object-contain), bukan seluruh panggung.
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center" style={{ containerType: "size" }}>
               <div
@@ -1467,6 +1523,35 @@ export default function LivePlayer({
                     : { aspectRatio: String(realRatio), width: `min(100cqw, calc(100cqh * ${realRatio}))`, containerType: "inline-size" }
                 }
               >
+                {activeGoals.length > 0 && (
+                  <div className="absolute left-2 top-2 flex max-w-[70%] flex-col gap-1.5">
+                    {activeGoals.map((g) => {
+                      const pct = Math.min(100, Math.round((g.current / g.target) * 100));
+                      const done = g.current >= g.target;
+                      return (
+                        <div key={g.giftId} className="flex items-center gap-1.5 rounded-xl bg-black/55 px-1.5 py-1 text-white shadow backdrop-blur-sm">
+                          <GiftThumb src={g.icon} size="clamp(16px, 5cqw, 22px)" />
+                          <span className="min-w-0 flex-1 leading-tight">
+                            <span className="flex items-center justify-between gap-2 font-semibold" style={{ fontSize: "clamp(8px, 3cqw, 11px)" }}>
+                              <span className="truncate">{g.name ?? `Gift #${g.giftId}`}</span>
+                              <span className={`shrink-0 tabular-nums ${done ? "text-emerald-300" : "text-amber-200"}`}>
+                                {g.current}/{g.target}
+                              </span>
+                            </span>
+                            <span className="mt-0.5 flex items-center gap-1.5">
+                              <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/20">
+                                <span className={`block h-full rounded-full transition-all ${done ? "bg-emerald-400" : "bg-amber-400"}`} style={{ width: `${pct}%` }} />
+                              </span>
+                              <span className="shrink-0 tabular-nums text-white/70" style={{ fontSize: "clamp(7px, 2.6cqw, 10px)" }}>
+                                {done ? "Tercapai" : g.expiresAt ? mmss(g.expiresAt - nowMs) : ""}
+                              </span>
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 {bigGift && (
                   <div
                     key={bigGift.id}
